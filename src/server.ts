@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { generate } from "./pipeline/generate";
 import { finalize } from "./pipeline/finalize";
+import { getGuidelinesPdf } from "./pdf/store";
 import { IntakeSchema, FinalizeRequestSchema } from "./schemas";
 
 // Load environment variables
@@ -82,8 +83,17 @@ app.post("/finalize", async (req, res) => {
 
     // Run finalize pipeline
     const result = await finalize(request);
-    
-    console.log("✅ Finalize pipeline completed successfully");
+
+    if (result.guidelines_pdf_id) {
+      const baseUrl = `${req.protocol}://${req.get("host") ?? ""}`.replace(/\/$/, "");
+      (result as Record<string, unknown>).guidelines_pdf_url = `${baseUrl}/guidelines/${result.guidelines_pdf_id}.pdf`;
+      delete (result as Record<string, unknown>).guidelines_pdf_id;
+    }
+
+    console.log("✅ Finalize pipeline completed successfully", {
+      regen_seed: result.regen_seed,
+      regen: request.regen === true,
+    });
     res.json(result);
   } catch (error) {
     console.error("❌ Finalize error:", error);
@@ -106,6 +116,23 @@ app.post("/finalize", async (req, res) => {
       res.status(500).json({ error: "Internal server error" });
     }
   }
+});
+
+// Guidelines PDF download (in-memory store; id from finalize response guidelines_pdf_id)
+app.get("/guidelines/:id", (req, res) => {
+  const id = (req.params.id ?? "").replace(/\.pdf$/i, "");
+  if (!id) {
+    res.status(400).json({ error: "Missing guidelines id" });
+    return;
+  }
+  const buffer = getGuidelinesPdf(id);
+  if (!buffer) {
+    res.status(404).json({ error: "Guidelines not found or expired" });
+    return;
+  }
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="brand-guidelines-${id}.pdf"`);
+  res.send(buffer);
 });
 
 // Start server with error handling

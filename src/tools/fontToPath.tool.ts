@@ -1,55 +1,136 @@
 import * as opentype from "opentype.js";
 import * as path from "path";
 import * as fs from "fs";
+import { z } from "zod";
+import { tool } from "@openai/agents";
 
 const FONTS_DIR = path.join(process.cwd(), "assets", "fonts");
 
+const FONT_FILES: Record<"inter" | "inter_bold" | "dm_serif", string> = {
+  inter: "Inter-Regular.ttf",
+  inter_bold: "Inter-Bold.ttf",
+  dm_serif: "DMSerifDisplay-Regular.ttf",
+};
+
+function resolveFontPath(fontName: keyof typeof FONT_FILES): string {
+  const file = FONT_FILES[fontName];
+  const candidates = [
+    path.join(FONTS_DIR, file),
+    path.join(process.cwd(), "assets", "fonts", file),
+    path.join(__dirname, "..", "..", "assets", "fonts", file),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  throw new Error(
+    `Font file not found: ${file}. Place OFL fonts in assets/fonts/ (see assets/fonts/README.md).`,
+  );
+}
+
+function loadFont(fontName: keyof typeof FONT_FILES): opentype.Font {
+  const fontPath = resolveFontPath(fontName);
+  return opentype.loadSync(fontPath);
+}
+
+const FontToPathInputSchema = z.object({
+  text: z.string().min(1),
+  font_name: z.enum(["inter", "inter_bold", "dm_serif"]),
+  font_size: z.number().min(1).max(2000),
+  tracking_px: z.number().min(-50).max(200).default(0),
+});
+
+const FontToPathOutputSchema = z.object({
+  path_d: z.string(),
+  viewBox: z.string(),
+  width: z.number(),
+  height: z.number(),
+});
+
+export type FontToPathInput = z.infer<typeof FontToPathInputSchema>;
+export type FontToPathOutput = z.infer<typeof FontToPathOutputSchema>;
+
+/**
+ * Convert text to a single SVG path and tight viewBox using opentype.js.
+ * Tracking is applied by adjusting advance per glyph (letterSpacing), not CSS.
+ */
+export function fontToPath(input: FontToPathInput): FontToPathOutput {
+  const { text, font_name, font_size, tracking_px } = input;
+  const font = loadFont(font_name);
+
+  const letterSpacing =
+    tracking_px !== 0 ? tracking_px / font_size : undefined;
+  const options: { letterSpacing?: number } = {};
+  if (letterSpacing !== undefined) options.letterSpacing = letterSpacing;
+
+  const path = font.getPath(text, 0, 0, font_size, options);
+  const path_d = path.toPathData(2);
+
+  const bbox = path.getBoundingBox();
+  const x1 = bbox.x1;
+  const y1 = bbox.y1;
+  const x2 = bbox.x2;
+  const y2 = bbox.y2;
+  const width = x2 - x1;
+  const height = y2 - y1;
+
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    throw new Error(
+      "font_to_path: path bounds invalid (empty text or font error).",
+    );
+  }
+
+  const viewBox = `${x1} ${y1} ${width} ${height}`;
+
+  return {
+    path_d,
+    viewBox,
+    width,
+    height,
+  };
+}
+
+export const font_to_path = tool({
+  name: "font_to_path",
+  description:
+    "Convert text to an SVG path outline using opentype.js. Returns path_d, tight viewBox, and dimensions. Uses assets/fonts (Inter-Regular, Inter-Bold, DMSerifDisplay-Regular).",
+  parameters: FontToPathInputSchema,
+  async execute(args) {
+    const input = FontToPathInputSchema.parse(args);
+    const result = fontToPath(input);
+    return JSON.stringify(result);
+  },
+});
+
+// --- Legacy API for existing callers (deterministicSvg, motifMark) ---
+
+export type LegacyFontFamily = "Inter" | "DM Serif Display";
+
 interface FontToPathOptions {
   text: string;
-  fontFamily: "Inter" | "DM Serif Display";
+  fontFamily: LegacyFontFamily;
   fontSize: number;
   fontWeight?: number;
-  tracking?: number; // Letter spacing in em units
+  tracking?: number;
   x?: number;
   y?: number;
 }
 
-/**
- * Loads a font file from the assets/fonts directory
- */
-function loadFont(fontFamily: "Inter" | "DM Serif Display", fontWeight?: number): opentype.Font {
-  const fontWeightStr = fontWeight ? `-${fontWeight}` : "";
-  const fontFile = `${fontFamily}${fontWeightStr}.ttf`;
-  const fontPath = path.join(FONTS_DIR, fontFile);
-
-  if (!fs.existsSync(fontPath)) {
-    // Fallback to default weight if specific weight not found
-    const fallbackPath = path.join(FONTS_DIR, `${fontFamily}.ttf`);
-    if (fs.existsSync(fallbackPath)) {
-      return opentype.loadSync(fallbackPath);
-    }
-    // Try alternative paths (for different directory structures)
-    const altPaths = [
-      path.join(process.cwd(), "src", "assets", "fonts", fontFile),
-      path.join(process.cwd(), "src", "assets", "fonts", `${fontFamily}.ttf`),
-      path.join(__dirname, "..", "..", "assets", "fonts", fontFile),
-      path.join(__dirname, "..", "..", "assets", "fonts", `${fontFamily}.ttf`),
-    ];
-    
-    for (const altPath of altPaths) {
-      if (fs.existsSync(altPath)) {
-        return opentype.loadSync(altPath);
-      }
-    }
-    
-    throw new Error(`Font file not found: ${fontPath}. Please ensure font files are in assets/fonts directory.`);
-  }
-
-  return opentype.loadSync(fontPath);
+function legacyFontName(
+  fontFamily: LegacyFontFamily,
+  fontWeight?: number,
+): "inter" | "inter_bold" | "dm_serif" {
+  if (fontFamily === "DM Serif Display") return "dm_serif";
+  return fontWeight === 700 ? "inter_bold" : "inter";
 }
 
 /**
- * Converts text to SVG path outlines using opentype.js
+ * Legacy: converts text to SVG path d string. Used by deterministicSvg and motifMark.
+ * Tracking in em units (tracking * fontSize = tracking_px equivalent when tracking is in em).
  */
 export function textToPath(options: FontToPathOptions): string {
   const {
@@ -62,65 +143,33 @@ export function textToPath(options: FontToPathOptions): string {
     y = 0,
   } = options;
 
-  try {
-    const font = loadFont(fontFamily, fontWeight);
-    
-    // Calculate text metrics
-    const scale = fontSize / font.unitsPerEm;
-    const paths: string[] = [];
-    
-    let currentX = x;
-    const baseY = y;
-    
-    // Render each character
-    for (let i = 0; i < text.length; i++) {
-      const char = text[i];
-      if (!char) continue;
-      
-      const glyph = font.charToGlyph(char);
-      
-      if (glyph) {
-        // Get glyph path
-        const glyphPath = glyph.getPath(currentX, baseY, fontSize);
-        
-        // Convert to SVG path string
-        const pathData = glyphPath.toSVG(2); // 2 decimal places
-        paths.push(pathData);
-        
-        // Advance to next character position
-        const advanceWidth = glyph.advanceWidth ?? glyph.advanceWidth ?? fontSize * 0.6; // Fallback if undefined
-        const glyphWidth = advanceWidth * scale;
-        currentX += glyphWidth + (tracking * fontSize);
-      }
-    }
-    
-    return paths.join(" ");
-  } catch (error) {
-    console.error(`Error converting text to path: ${error}`);
-    // Fallback: return empty path if font loading fails
-    return "";
-  }
+  const fontName = legacyFontName(
+    fontFamily as LegacyFontFamily,
+    fontWeight,
+  );
+  const tracking_px = tracking * fontSize;
+  const result = fontToPath({
+    text,
+    font_name: fontName,
+    font_size: fontSize,
+    tracking_px,
+  });
+  return result.path_d;
 }
 
-/**
- * Gets available font weights for a font family
- */
-export function getAvailableFontWeights(fontFamily: "Inter" | "DM Serif Display"): number[] {
+export function getAvailableFontWeights(
+  fontFamily: "Inter" | "DM Serif Display",
+): number[] {
+  const names: ("inter" | "inter_bold" | "dm_serif")[] =
+    fontFamily === "Inter" ? ["inter", "inter_bold"] : ["dm_serif"];
   const weights: number[] = [];
-  const commonWeights = [100, 200, 300, 400, 500, 600, 700, 800, 900];
-  
-  for (const weight of commonWeights) {
-    const fontPath = path.join(FONTS_DIR, `${fontFamily}-${weight}.ttf`);
-    if (fs.existsSync(fontPath)) {
-      weights.push(weight);
+  for (const name of names) {
+    try {
+      loadFont(name);
+      weights.push(name === "inter_bold" ? 700 : 400);
+    } catch {
+      // skip
     }
   }
-  
-  // Also check for base font file
-  const basePath = path.join(FONTS_DIR, `${fontFamily}.ttf`);
-  if (fs.existsSync(basePath) && weights.length === 0) {
-    weights.push(400); // Default weight
-  }
-  
-  return weights;
+  return weights.length ? weights : [400];
 }

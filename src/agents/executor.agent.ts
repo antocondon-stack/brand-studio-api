@@ -11,6 +11,7 @@ import {
   generateMotifMark,
   scoreMotifDistinctiveness,
 } from "../tools/motifMark.tool";
+import { buildTemplatePreviews } from "../tools/templatePreview.tool";
 
 // Schema for the executor output (palette, fonts, templates)
 const ExecutorOutputSchema = z.object({
@@ -33,14 +34,16 @@ const ExecutorOutputSchema = z.object({
       usage: z.string().min(1),
     }),
   ),
-  templates: z.array(
-    z.object({
-      id: z.string().min(1),
-      name: z.string().min(1),
-      description: z.string().min(1),
-      format: z.string().min(1),
-    }),
-  ),
+  templates: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        name: z.string().min(1),
+        description: z.string().min(1),
+        format: z.string().min(1),
+      }),
+    )
+    .optional(),
 });
 
 export const ExecutorAgent = new Agent({
@@ -86,43 +89,41 @@ export async function runExecutorAgent(
   request: FinalizeRequest,
   criticActions?: string[],
   selectedConcept?: LogoConcept | null,
+  runSeed?: string,
 ): Promise<FinalKit> {
   const { intake, chosen_direction } = request;
 
-  // Step 1: Generate logos using deterministic SVG function
   console.log("🎨 Generating logos...");
-  
-  // Generate a simple palette from keywords (simplified approach)
-  // In production, you might want to use an AI service to generate actual colors from keywords
-  // Note: The schema expects 6-digit hex codes like #123456 (7 chars total with #)
   const defaultPalette = [
-    "#1a1a1a", // dark
-    "#ffffff", // light
-    "#3b82f6", // blue
-    "#10b981", // green
-    "#f59e0b", // amber
-    "#ef4444", // red
-    "#8b5cf6", // purple
+    "#1a1a1a",
+    "#ffffff",
+    "#3b82f6",
+    "#10b981",
+    "#f59e0b",
+    "#ef4444",
+    "#8b5cf6",
   ];
 
-  // Generate logos using the deterministic SVG function
   const logos = buildDeterministicSvgs({
     brand_name: intake.brand_name,
     direction_name: chosen_direction.name,
     logo_archetype: chosen_direction.logo_archetype,
-    keywords: chosen_direction.color_keywords,
+    keywords: chosen_direction.keywords,
     palette_hex: defaultPalette,
-    vibe: chosen_direction.one_liner,
-    tracking: 0, // Default tracking, can be adjusted based on creative direction
+    vibe: chosen_direction.visual_thesis,
+    tracking: 0,
+    regen_seed: runSeed,
   });
 
   // Step 1.5: Generate motif mark via motif_mark (use selected concept's motif family when provided)
   console.log("🎯 Generating motif mark...");
 
   const seedNum = intake.brand_name.length + chosen_direction.name.length;
-  const seed = `${intake.brand_name}-${chosen_direction.name}-${seedNum}`;
-  const distinctivenessHook = `${chosen_direction.one_liner} ${chosen_direction.narrative}`.toLowerCase();
-  const motifFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap" | "monogram-interlock"> = [
+  const seed = runSeed
+    ? `${intake.brand_name}-${chosen_direction.name}-${runSeed}`
+    : `${intake.brand_name}-${chosen_direction.name}-${seedNum}`;
+  const distinctivenessHook = `${chosen_direction.visual_thesis} ${chosen_direction.rationale} ${chosen_direction.logo_requirements?.distinctiveness_hook ?? ""}`.toLowerCase();
+  const supportedMotifFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap" | "monogram-interlock"> = [
     "loop",
     "interlock",
     "orbit",
@@ -132,9 +133,42 @@ export async function runExecutorAgent(
   ];
 
   let motifFamily: "loop" | "interlock" | "orbit" | "fold" | "swap" | "monogram-interlock";
-  if (selectedConcept && motifFamilies.includes(selectedConcept.motif_family as typeof motifFamily)) {
+  if (selectedConcept && supportedMotifFamilies.includes(selectedConcept.motif_family as typeof motifFamily)) {
     motifFamily = selectedConcept.motif_family as typeof motifFamily;
     console.log(`✅ Using selected concept motif: ${motifFamily}`);
+  } else if (chosen_direction.motif_system?.motifs?.length) {
+    const fromDirection = chosen_direction.motif_system.motifs.find((m) =>
+      supportedMotifFamilies.includes(m as typeof motifFamily),
+    );
+    if (fromDirection) {
+      motifFamily = fromDirection as typeof motifFamily;
+      console.log(`✅ Using direction motif_system: ${motifFamily}`);
+    } else {
+      const scoringFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap"> = [
+        "loop", "interlock", "orbit", "fold", "swap",
+      ];
+      const selectedFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap"> = [];
+      const usedIndices = new Set<number>();
+      for (let i = 0; i < 3; i++) {
+        let idx = (seedNum + i * 7) % scoringFamilies.length;
+        while (usedIndices.has(idx)) {
+          idx = (idx + 1) % scoringFamilies.length;
+        }
+        usedIndices.add(idx);
+        const family = scoringFamilies[idx];
+        if (family) selectedFamilies.push(family);
+      }
+      const motifCandidates = selectedFamilies.map((family) => {
+        const score = scoreMotifDistinctiveness(family, distinctivenessHook);
+        return { family, score };
+      });
+      const first = motifCandidates[0];
+      const best = first && motifCandidates.length > 0
+        ? motifCandidates.reduce((a, c) => (c.score > a.score ? c : a), first)
+        : { family: "loop" as const, score: 0 };
+      motifFamily = best.family;
+      console.log(`✅ Selected motif: ${motifFamily}`);
+    }
   } else {
     const scoringFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap"> = [
       "loop", "interlock", "orbit", "fold", "swap",
@@ -208,13 +242,20 @@ export async function runExecutorAgent(
 
   const executorOutput = ExecutorOutputSchema.parse(output);
 
-  // Combine logos with executor output (mark from motif_mark tool)
+  const templates = buildTemplatePreviews({
+    palette: executorOutput.palette,
+    fonts: executorOutput.fonts,
+    direction_keywords: chosen_direction.keywords,
+    brand_name: intake.brand_name,
+    logo_svg_mark: motifResult.mark_svg,
+  });
+
   const finalKit: FinalKit = {
     logo_svg_wordmark: logos.logo_svg_wordmark,
     logo_svg_mark: motifResult.mark_svg,
     palette: executorOutput.palette,
     fonts: executorOutput.fonts,
-    templates: executorOutput.templates,
+    templates,
   };
 
   if (selectedConcept) {

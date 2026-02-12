@@ -1,56 +1,77 @@
+import * as crypto from "crypto";
 import {
   FinalizeRequestSchema,
   FinalKitSchema,
+  FinalizeResponseSchema,
   type FinalKit,
   type FinalizeRequest,
+  type FinalizeResponse,
   type LogoConcept,
 } from "../schemas";
 import { runExecutorAgent } from "../agents/executor.agent";
 import { runLogoCriticAgent, runLogoCriticAgentForConcept, conceptScoreFromCritic } from "../agents/logoCritic.agent";
 import { runConceptArtistAgent } from "../agents/conceptArtist.agent";
+import { buildGuidelinesPdf } from "../pdf/guidelines";
+import { storeGuidelinesPdf } from "../pdf/store";
 
 const MAX_ITERATIONS = 2;
 
-export async function finalize(request: FinalizeRequest): Promise<FinalKit> {
+function generateRunSeed(): string {
+  return crypto.randomUUID();
+}
+
+export async function finalize(request: FinalizeRequest): Promise<FinalizeResponse> {
   const safeRequest = FinalizeRequestSchema.parse(request);
-  const { intake, chosen_direction } = safeRequest;
+  const { intake, chosen_direction, regen, regen_seed: requestedRegenSeed } = safeRequest;
 
-  console.log("🎯 Running Finalize Pipeline...");
-
-  // 1) Generate concepts (6 visually distinct logo concept renders)
-  console.log("🎨 Step 1: Generating concepts...");
-  let concepts: LogoConcept[];
-  try {
-    concepts = await runConceptArtistAgent(
-      intake.brand_name,
-      chosen_direction.name,
-      `${chosen_direction.one_liner} ${chosen_direction.narrative}`,
-    );
-  } catch (e) {
-    console.warn("Concept generation failed, continuing without concepts:", e);
-    concepts = [];
+  const runSeed = requestedRegenSeed ?? generateRunSeed();
+  if (regen) {
+    console.log("🔄 Regeneration: re-running execution only (regen=true)", {
+      regen_seed: runSeed,
+      brand_name: intake.brand_name,
+    });
   }
+  console.log("regen_seed:", runSeed, "(reproducible output per customer)");
 
-  // 2) Run LogoCriticAgent to score concept ideas; 3) Select top concept
   let selectedConcept: LogoConcept | null = null;
-  if (concepts.length > 0) {
-    console.log("🔍 Step 2: Scoring concepts...");
-    const scores = await Promise.all(
-      concepts.map((c) =>
-        runLogoCriticAgentForConcept(c, intake.brand_name, chosen_direction.name).then((out) => ({
-          concept: c,
-          score: conceptScoreFromCritic(out),
-        })),
-      ),
-    );
-    if (scores.length > 0) {
-      const top = scores.reduce((best, s) => (s.score > best.score ? s : best), scores[0]!);
-      selectedConcept = top.concept;
-      console.log(`✅ Step 3: Selected concept id=${selectedConcept.id} (motif=${selectedConcept.motif_family}, composition=${selectedConcept.composition})`);
+
+  if (!regen) {
+    console.log("🎯 Running Finalize Pipeline...");
+    // 1) Generate concepts (skip when regen=true)
+    console.log("🎨 Step 1: Generating concepts...");
+    let concepts: LogoConcept[];
+    try {
+      concepts = await runConceptArtistAgent(
+        intake.brand_name,
+        chosen_direction.name,
+        `${chosen_direction.visual_thesis} ${chosen_direction.rationale}`,
+      );
+    } catch (e) {
+      console.warn("Concept generation failed, continuing without concepts:", e);
+      concepts = [];
     }
+
+    // 2) Score concepts; 3) Select top concept
+    if (concepts.length > 0) {
+      console.log("🔍 Step 2: Scoring concepts...");
+      const scores = await Promise.all(
+        concepts.map((c) =>
+          runLogoCriticAgentForConcept(c, intake.brand_name, chosen_direction.name).then((out) => ({
+            concept: c,
+            score: conceptScoreFromCritic(out),
+          })),
+        ),
+      );
+      if (scores.length > 0) {
+        const top = scores.reduce((best, s) => (s.score > best.score ? s : best), scores[0]!);
+        selectedConcept = top.concept;
+        console.log(`✅ Step 3: Selected concept id=${selectedConcept.id} (motif=${selectedConcept.motif_family}, composition=${selectedConcept.composition})`);
+      }
+    }
+  } else {
+    console.log("🎯 Regeneration: skipping concept generation and selection");
   }
 
-  // 4) Pass selected concept into vector engine; 5) run final critic; support retry
   let finalKit: FinalKit;
   let criticResult: { pass: boolean; actions: string[] } | null = null;
   let iteration = 0;
@@ -63,9 +84,9 @@ export async function finalize(request: FinalizeRequest): Promise<FinalKit> {
       safeRequest,
       criticResult?.pass === false ? criticResult.actions : undefined,
       selectedConcept ?? undefined,
+      runSeed,
     );
 
-    // 5) Run final LogoCriticAgent review
     console.log("🔍 Running final Logo Critic...");
     const criticOutput = await runLogoCriticAgent({
       logo_svg_wordmark: finalKit.logo_svg_wordmark,
@@ -81,7 +102,24 @@ export async function finalize(request: FinalizeRequest): Promise<FinalKit> {
 
     if (criticOutput.pass) {
       console.log("✅ Finalize pipeline completed (critic passed)");
-      return FinalKitSchema.parse(finalKit);
+      let guidelines_pdf_id: string | undefined;
+      try {
+        const pdfBuffer = await buildGuidelinesPdf(
+          finalKit,
+          safeRequest.intake,
+          safeRequest.brand_strategy,
+          safeRequest.chosen_direction,
+        );
+        guidelines_pdf_id = storeGuidelinesPdf(pdfBuffer);
+      } catch (e) {
+        console.warn("Guidelines PDF generation failed:", e);
+      }
+      const response: FinalizeResponse = {
+        final_kit: FinalKitSchema.parse(finalKit),
+        regen_seed: runSeed,
+        guidelines_pdf_id,
+      };
+      return FinalizeResponseSchema.parse(response);
     }
 
     criticResult = { pass: criticOutput.pass, actions: criticOutput.actions };
@@ -95,5 +133,22 @@ export async function finalize(request: FinalizeRequest): Promise<FinalKit> {
   }
 
   console.log("✅ Finalize pipeline completed");
-  return FinalKitSchema.parse(finalKit!);
+  let guidelines_pdf_id: string | undefined;
+  try {
+    const pdfBuffer = await buildGuidelinesPdf(
+      finalKit!,
+      safeRequest.intake,
+      safeRequest.brand_strategy,
+      safeRequest.chosen_direction,
+    );
+    guidelines_pdf_id = storeGuidelinesPdf(pdfBuffer);
+  } catch (e) {
+    console.warn("Guidelines PDF generation failed:", e);
+  }
+  const response: FinalizeResponse = {
+    final_kit: FinalKitSchema.parse(finalKit!),
+    regen_seed: runSeed,
+    guidelines_pdf_id,
+  };
+  return FinalizeResponseSchema.parse(response);
 }

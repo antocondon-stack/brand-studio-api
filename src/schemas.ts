@@ -57,26 +57,54 @@ export const BrandStrategySchema = z.object({
 
 export type BrandStrategy = z.infer<typeof BrandStrategySchema>;
 
-// Creative directions (A/B/C) produced by CreativeDirectorAgent
+// Creative directions (A/B/C) — world-class CD spec (motifMark families, executable)
+const WordmarkCaseSchema = z.enum(["lowercase", "uppercase", "titlecase"]);
+const ContrastSchema = z.enum(["low", "med", "high"]);
+const TerminalSchema = z.enum(["round", "sharp", "mixed"]);
+const TrackingSchema = z.enum(["tight", "normal", "wide"]);
+const SilhouetteSchema = z.enum(["simple", "medium", "complex"]);
+const StrokeSchema = z.enum(["none", "mono_stroke"]);
+const MinDetailSchema = z.enum(["low", "med"]);
+
 export const CreativeDirectionSchema = z.object({
   id: z.enum(["A", "B", "C"]),
   name: z.string().min(1),
-  one_liner: z.string().min(1),
-  narrative: z.string().min(1),
-  logo_archetype: z.enum([
-    "wordmark",
-    "monogram",
-    "symbol",
-    "combination",
-    "emblem",
+  rationale: z.string().min(1),
+  keywords: z.array(z.string().min(1)),
+  logo_archetype: z.enum(["wordmark", "monogram", "emblem", "combination"]),
+  typography_axis: z.enum([
+    "geometric",
+    "humanist",
+    "editorial",
+    "grotesk",
+    "neo-grotesk",
   ]),
-  color_keywords: z.array(z.string().min(1)),
-  typography_keywords: z.array(z.string().min(1)),
-  imagery_style: z.string().min(1),
-  motion_style: z.string().optional(),
-  use_cases: z.array(z.string().min(1)),
-  risks: z.array(z.string().min(1)).optional(),
-  mitigations: z.array(z.string().min(1)).optional(),
+  color_logic: z.enum([
+    "mono_accent",
+    "neutral_premium",
+    "vibrant",
+    "earthy",
+    "tech_clean",
+  ]),
+  design_rules: z.array(z.string().min(1)),
+  visual_thesis: z.string().min(1),
+  motif_system: z.object({
+    motifs: z.array(z.string().min(1)),
+    geometry_notes: z.array(z.string().min(1)),
+    avoid: z.array(z.string().min(1)),
+  }),
+  wordmark_style: z.object({
+    case: WordmarkCaseSchema,
+    contrast: ContrastSchema,
+    terminal: TerminalSchema,
+    tracking: TrackingSchema,
+  }),
+  logo_requirements: z.object({
+    silhouette: SilhouetteSchema,
+    stroke: StrokeSchema,
+    min_detail: MinDetailSchema,
+    distinctiveness_hook: z.string().min(1),
+  }),
 });
 
 export type CreativeDirection = z.infer<typeof CreativeDirectionSchema>;
@@ -126,14 +154,26 @@ export const FinalKitSchema = z.object({
       usage: z.string().min(1),
     }),
   ),
-  templates: z.array(
-    z.object({
-      id: z.string().min(1),
-      name: z.string().min(1),
-      description: z.string().min(1),
-      format: z.string().min(1),
+  templates: z.object({
+    social_post: z.object({
+      layout: z.string().min(1),
+      copy_slots: z.object({
+        headline: z.string(),
+        subhead: z.string(),
+        cta: z.string(),
+      }),
+      preview_svg: z.string().min(1),
     }),
-  ),
+    website_hero: z.object({
+      layout: z.string().min(1),
+      copy_slots: z.object({
+        headline: z.string(),
+        subhead: z.string(),
+        cta: z.string(),
+      }),
+      preview_svg: z.string().min(1),
+    }),
+  }),
 });
 
 export type FinalKit = z.infer<typeof FinalKitSchema>;
@@ -153,9 +193,22 @@ export const FinalizeRequestSchema = z.object({
   market_summary: MarketSummarySchema,
   brand_strategy: BrandStrategySchema,
   chosen_direction: CreativeDirectionSchema,
+  regen: z.boolean().optional(),
+  regen_seed: z.string().optional(),
 });
 
 export type FinalizeRequest = z.infer<typeof FinalizeRequestSchema>;
+
+/** POST /finalize response: final_kit + regen_seed; optional guidelines PDF (server sets guidelines_pdf_url from guidelines_pdf_id) */
+export const FinalizeResponseSchema = z.object({
+  final_kit: FinalKitSchema,
+  regen_seed: z.string().min(1),
+  guidelines_pdf_url: z.string().optional(),
+  guidelines_pdf_id: z.string().optional(),
+  guidelines_pdf_base64: z.string().optional(),
+});
+
+export type FinalizeResponse = z.infer<typeof FinalizeResponseSchema>;
 
 // Logo critic output (LogoCriticAgent)
 export const LogoCriticScoresSchema = z.object({
