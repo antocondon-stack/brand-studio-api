@@ -9,7 +9,6 @@ import {
 import { buildDeterministicSvgs } from "../tools/deterministicSvg.tool";
 import {
   generateMotifMark,
-  createMotifMarkSVG,
   scoreMotifDistinctiveness,
 } from "../tools/motifMark.tool";
 
@@ -117,33 +116,38 @@ export async function runExecutorAgent(
     tracking: 0, // Default tracking, can be adjusted based on creative direction
   });
 
-  // Step 1.5: Generate motif mark (use selected concept's motif family when provided)
+  // Step 1.5: Generate motif mark via motif_mark (use selected concept's motif family when provided)
   console.log("🎯 Generating motif mark...");
-  
-  const seed = intake.brand_name.length + chosen_direction.name.length;
+
+  const seedNum = intake.brand_name.length + chosen_direction.name.length;
+  const seed = `${intake.brand_name}-${chosen_direction.name}-${seedNum}`;
   const distinctivenessHook = `${chosen_direction.one_liner} ${chosen_direction.narrative}`.toLowerCase();
-  const motifFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap"> = [
+  const motifFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap" | "monogram-interlock"> = [
     "loop",
     "interlock",
     "orbit",
     "fold",
     "swap",
+    "monogram-interlock",
   ];
 
-  let motifFamily: "loop" | "interlock" | "orbit" | "fold" | "swap";
+  let motifFamily: "loop" | "interlock" | "orbit" | "fold" | "swap" | "monogram-interlock";
   if (selectedConcept && motifFamilies.includes(selectedConcept.motif_family as typeof motifFamily)) {
     motifFamily = selectedConcept.motif_family as typeof motifFamily;
     console.log(`✅ Using selected concept motif: ${motifFamily}`);
   } else {
+    const scoringFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap"> = [
+      "loop", "interlock", "orbit", "fold", "swap",
+    ];
     const selectedFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap"> = [];
     const usedIndices = new Set<number>();
     for (let i = 0; i < 3; i++) {
-      let idx = (seed + i * 7) % motifFamilies.length;
+      let idx = (seedNum + i * 7) % scoringFamilies.length;
       while (usedIndices.has(idx)) {
-        idx = (idx + 1) % motifFamilies.length;
+        idx = (idx + 1) % scoringFamilies.length;
       }
       usedIndices.add(idx);
-      const family = motifFamilies[idx];
+      const family = scoringFamilies[idx];
       if (family) selectedFamilies.push(family);
     }
     const motifCandidates = selectedFamilies.map((family) => {
@@ -158,14 +162,15 @@ export async function runExecutorAgent(
     console.log(`✅ Selected motif: ${motifFamily}`);
   }
 
-  const motifPath = generateMotifMark({
-    family: motifFamily,
-    strokeWidth: 2,
-    cornerRadius: 2,
-    gridSize: 24,
+  const motifResult = generateMotifMark({
+    brand_name: intake.brand_name,
+    motif_family: motifFamily,
     seed,
+    grid: 24,
+    stroke_px: 2,
+    corner_radius_px: 2,
+    primary_hex: defaultPalette[0] ?? "#1a1a1a",
   });
-  const strongestMotif = { svg: createMotifMarkSVG(motifPath, 24, defaultPalette[0]) };
 
   // Step 2: Run Executor Agent to get palette, fonts, and templates
   console.log("📦 Running Executor Agent...");
@@ -203,10 +208,10 @@ export async function runExecutorAgent(
 
   const executorOutput = ExecutorOutputSchema.parse(output);
 
-  // Combine logos with executor output
+  // Combine logos with executor output (mark from motif_mark tool)
   const finalKit: FinalKit = {
     logo_svg_wordmark: logos.logo_svg_wordmark,
-    logo_svg_mark: logos.logo_svg_mark,
+    logo_svg_mark: motifResult.mark_svg,
     palette: executorOutput.palette,
     fonts: executorOutput.fonts,
     templates: executorOutput.templates,
