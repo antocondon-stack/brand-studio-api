@@ -12,14 +12,20 @@ const PORT = Number(process.env.PORT) || 8787;
 app.use(cors());
 app.use(express.json());
 
+// Error handling middleware
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error("Unhandled error:", err);
+  res.status(500).json({ error: "Internal server error", message: err?.message || "Unknown error" });
+});
+
 // Health check endpoint
 app.get("/", (req, res) => {
-  res.json({ status: "ok", message: "Brand Studio API is running" });
+  res.json({ status: "ok", message: "Brand Studio API is running", port: PORT });
 });
 
 // Health check endpoint
 app.get("/health", (req, res) => {
-  res.json({ status: "healthy" });
+  res.json({ status: "healthy", port: PORT });
 });
 
 // Generate endpoint - placeholder for now
@@ -44,7 +50,16 @@ app.post("/finalize", async (req, res) => {
   }
 });
 
-// Start server
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Brand Studio API server running on port ${PORT}`);
-});
+// Start server with error handling
+try {
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`🚀 Brand Studio API server running on port ${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+  }).on("error", (err: Error) => {
+    console.error("Failed to start server:", err);
+    process.exit(1);
+  });
+} catch (error) {
+  console.error("Server startup error:", error);
+  process.exit(1);
+}
