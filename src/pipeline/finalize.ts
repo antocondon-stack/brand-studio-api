@@ -3,6 +3,7 @@ import {
   FinalizeRequestSchema,
   FinalKitSchema,
   FinalizeResponseSchema,
+  type CreativeDirection,
   type FinalKit,
   type FinalizeRequest,
   type FinalizeResponse,
@@ -114,11 +115,7 @@ export async function finalize(request: FinalizeRequest): Promise<FinalizeRespon
       } catch (e) {
         console.warn("Guidelines PDF generation failed:", e);
       }
-      const response: FinalizeResponse = {
-        final_kit: FinalKitSchema.parse(finalKit),
-        regen_seed: runSeed,
-        guidelines_pdf_id,
-      };
+      const response = buildFinalizeResponse(finalKit, chosen_direction, runSeed, guidelines_pdf_id);
       return FinalizeResponseSchema.parse(response);
     }
 
@@ -145,10 +142,33 @@ export async function finalize(request: FinalizeRequest): Promise<FinalizeRespon
   } catch (e) {
     console.warn("Guidelines PDF generation failed:", e);
   }
-  const response: FinalizeResponse = {
-    final_kit: FinalKitSchema.parse(finalKit!),
+  const response = buildFinalizeResponse(finalKit!, chosen_direction, runSeed, guidelines_pdf_id);
+  return FinalizeResponseSchema.parse(response);
+}
+
+function buildFinalizeResponse(
+  finalKit: FinalKit,
+  chosen_direction: CreativeDirection,
+  runSeed: string,
+  guidelines_pdf_id: string | undefined,
+): FinalizeResponse {
+  const color_tags = [
+    chosen_direction.color_logic,
+    ...chosen_direction.keywords,
+  ].filter(Boolean);
+  const typography_tags = [
+    chosen_direction.typography_axis,
+    chosen_direction.wordmark_style.case,
+    chosen_direction.wordmark_style.contrast,
+    chosen_direction.wordmark_style.terminal,
+    chosen_direction.wordmark_style.tracking,
+  ].filter(Boolean);
+  return {
+    final_kit: FinalKitSchema.parse(finalKit),
+    chosen_direction,
+    color_tags,
+    typography_tags,
     regen_seed: runSeed,
     guidelines_pdf_id,
   };
-  return FinalizeResponseSchema.parse(response);
 }

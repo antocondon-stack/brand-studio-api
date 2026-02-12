@@ -199,9 +199,12 @@ export const FinalizeRequestSchema = z.object({
 
 export type FinalizeRequest = z.infer<typeof FinalizeRequestSchema>;
 
-/** POST /finalize response: final_kit + regen_seed; optional guidelines PDF (server sets guidelines_pdf_url from guidelines_pdf_id) */
+/** POST /finalize response: final_kit + chosen_direction + regen_seed; optional guidelines PDF */
 export const FinalizeResponseSchema = z.object({
   final_kit: FinalKitSchema,
+  chosen_direction: CreativeDirectionSchema,
+  color_tags: z.array(z.string()),
+  typography_tags: z.array(z.string()),
   regen_seed: z.string().min(1),
   guidelines_pdf_url: z.string().optional(),
   guidelines_pdf_id: z.string().optional(),
