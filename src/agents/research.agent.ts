@@ -31,7 +31,7 @@ Return ONLY valid JSON with EXACT keys:
 }
 
 Constraints:
-- competitors: 6–10 entries, each with name (required), positioning (required), visual_style (required), url (optional - omit the field entirely if unknown, do not use empty string)
+- competitors: 6–10 entries, each with name (required), positioning (required), visual_style (required), url (optional - ONLY include if you have a valid, complete URL starting with http:// or https://. If unknown or invalid, DO NOT include the url field at all - omit it completely)
 - visual_patterns: 6–10 concrete visual language bullets (type, color, layout, iconography)
 - positioning_patterns: 6–10 concrete messaging angles (promise, proof, tone)
 - cliches_to_avoid: 5–8 bullets specific to this category
@@ -40,6 +40,44 @@ Constraints:
   model: "gpt-4.1",
   outputType: MarketSummarySchema,
 });
+
+// Helper function to clean competitor URLs - remove invalid URLs and empty strings
+function cleanCompetitorUrls(rawOutput: any): any {
+  if (!rawOutput || !rawOutput.competitors || !Array.isArray(rawOutput.competitors)) {
+    return rawOutput;
+  }
+
+  const cleanedCompetitors = rawOutput.competitors.map((competitor: any) => {
+    const cleaned = { ...competitor };
+    
+    // Remove url field if it's empty, invalid, or not a valid URL
+    if (cleaned.url !== undefined) {
+      const urlStr = String(cleaned.url).trim();
+      
+      // Remove if empty string
+      if (urlStr === "" || urlStr === "null" || urlStr === "undefined") {
+        delete cleaned.url;
+      } else {
+        // Try to validate URL - if invalid, remove it
+        try {
+          new URL(urlStr);
+          // If URL is valid, keep it
+          cleaned.url = urlStr;
+        } catch {
+          // Invalid URL, remove it
+          delete cleaned.url;
+        }
+      }
+    }
+    
+    return cleaned;
+  });
+
+  return {
+    ...rawOutput,
+    competitors: cleanedCompetitors,
+  };
+}
 
 export async function runResearchAgent(intake: Intake): Promise<MarketSummary> {
   const safeIntake = IntakeSchema.parse(intake);
@@ -64,7 +102,11 @@ export async function runResearchAgent(intake: Intake): Promise<MarketSummary> {
   if (!output) {
     throw new Error("ResearchAgent did not produce a final output");
   }
-  return MarketSummarySchema.parse(output);
+
+  // Clean invalid URLs before validation
+  const cleanedOutput = cleanCompetitorUrls(output);
+  
+  return MarketSummarySchema.parse(cleanedOutput);
 }
 
 
