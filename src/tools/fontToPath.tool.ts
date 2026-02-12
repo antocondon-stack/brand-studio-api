@@ -12,24 +12,47 @@ const FONT_FILES: Record<"inter" | "inter_bold" | "dm_serif", string> = {
   dm_serif: "DMSerifDisplay-Regular.ttf",
 };
 
-function resolveFontPath(fontName: keyof typeof FONT_FILES): string {
+const FONT_DIRS = [
+  FONTS_DIR,
+  path.join(process.cwd(), "assets", "fonts"),
+  path.join(__dirname, "..", "..", "assets", "fonts"),
+];
+
+function resolveFontPath(fontName: keyof typeof FONT_FILES): string | null {
   const file = FONT_FILES[fontName];
-  const candidates = [
-    path.join(FONTS_DIR, file),
-    path.join(process.cwd(), "assets", "fonts", file),
-    path.join(__dirname, "..", "..", "assets", "fonts", file),
-  ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
+  const base = file.replace(/\.ttf$/i, "");
+  const toTry = [`${base}.ttf`, `${base}.otf`];
+  for (const dir of FONT_DIRS) {
+    for (const name of toTry) {
+      const p = path.join(dir, name);
+      if (fs.existsSync(p)) return p;
+    }
   }
-  throw new Error(
-    `Font file not found: ${file}. Place OFL fonts in assets/fonts/ (see assets/fonts/README.md).`,
-  );
+  return null;
 }
 
-function loadFont(fontName: keyof typeof FONT_FILES): opentype.Font {
+function loadFont(fontName: keyof typeof FONT_FILES): opentype.Font | null {
   const fontPath = resolveFontPath(fontName);
-  return opentype.loadSync(fontPath);
+  if (!fontPath) return null;
+  try {
+    return opentype.loadSync(fontPath);
+  } catch {
+    return null;
+  }
+}
+
+/** Fallback when fonts are missing: simple bar shape so /finalize does not 500 */
+function fallbackPathOutput(text: string, font_size: number, tracking_px: number): FontToPathOutput {
+  const len = Math.max(1, text.length);
+  const width = len * font_size * 0.6 + (len - 1) * (tracking_px ?? 0);
+  const height = font_size * 1.2;
+  const path_d = `M 0 ${height * 0.2} L ${width} ${height * 0.2} L ${width} ${height * 0.5} L 0 ${height * 0.5} Z`;
+  return {
+    path_d,
+    viewBox: `0 0 ${width} ${height}`,
+    width,
+    height,
+  };
 }
 
 const FontToPathInputSchema = z.object({
@@ -51,11 +74,15 @@ export type FontToPathOutput = z.infer<typeof FontToPathOutputSchema>;
 
 /**
  * Convert text to a single SVG path and tight viewBox using opentype.js.
- * Tracking is applied by adjusting advance per glyph (letterSpacing), not CSS.
+ * When font files are missing (e.g. on Railway without assets/fonts), returns a fallback bar shape so the API does not 500.
  */
 export function fontToPath(input: FontToPathInput): FontToPathOutput {
   const { text, font_name, font_size, tracking_px } = input;
   const font = loadFont(font_name);
+
+  if (!font) {
+    return fallbackPathOutput(text, font_size, tracking_px);
+  }
 
   const letterSpacing =
     tracking_px !== 0 ? tracking_px / font_size : undefined;
@@ -79,9 +106,7 @@ export function fontToPath(input: FontToPathInput): FontToPathOutput {
     width <= 0 ||
     height <= 0
   ) {
-    throw new Error(
-      "font_to_path: path bounds invalid (empty text or font error).",
-    );
+    return fallbackPathOutput(text, font_size, tracking_px);
   }
 
   const viewBox = `${x1} ${y1} ${width} ${height}`;
@@ -105,6 +130,11 @@ export const font_to_path = tool({
     return JSON.stringify(result);
   },
 });
+
+/** Check if a font file exists (for tool description / health). */
+export function hasFontFile(fontName: keyof typeof FONT_FILES): boolean {
+  return resolveFontPath(fontName) !== null;
+}
 
 // --- Legacy API for existing callers (deterministicSvg, motifMark) ---
 
@@ -164,12 +194,7 @@ export function getAvailableFontWeights(
     fontFamily === "Inter" ? ["inter", "inter_bold"] : ["dm_serif"];
   const weights: number[] = [];
   for (const name of names) {
-    try {
-      loadFont(name);
-      weights.push(name === "inter_bold" ? 700 : 400);
-    } catch {
-      // skip
-    }
+    if (loadFont(name)) weights.push(name === "inter_bold" ? 700 : 400);
   }
   return weights.length ? weights : [400];
 }
