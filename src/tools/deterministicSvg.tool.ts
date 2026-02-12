@@ -31,7 +31,7 @@ function pick<T>(items: T[], seed: number): T {
     throw new Error("Cannot pick from empty array");
   }
   const index = seed % items.length;
-  return items[index];
+  return items[index]!; // Safe because we checked length > 0
 }
 
 function buildDeterministicSvgs(input: DeterministicSvgInput) {
