@@ -38,7 +38,7 @@ Constraints:
 - whitespace_opportunities: 5–8 actionable, specific opportunities`,
   tools: [webSearchTool()],
   model: "gpt-4.1",
-  outputType: MarketSummarySchema,
+  // Note: outputType removed - we validate after cleaning URLs
 });
 
 // Helper function to clean competitor URLs - remove invalid URLs and empty strings
@@ -48,24 +48,28 @@ function cleanCompetitorUrls(rawOutput: any): any {
   }
 
   const cleanedCompetitors = rawOutput.competitors.map((competitor: any) => {
-    const cleaned = { ...competitor };
+    const cleaned: any = {
+      name: competitor.name,
+      positioning: competitor.positioning,
+      visual_style: competitor.visual_style,
+    };
     
-    // Remove url field if it's empty, invalid, or not a valid URL
-    if (cleaned.url !== undefined) {
-      const urlStr = String(cleaned.url).trim();
+    // Only add url if it exists and is valid
+    if (competitor.url !== undefined && competitor.url !== null) {
+      const urlStr = String(competitor.url).trim();
       
-      // Remove if empty string
-      if (urlStr === "" || urlStr === "null" || urlStr === "undefined") {
-        delete cleaned.url;
-      } else {
-        // Try to validate URL - if invalid, remove it
+      // Skip if empty, null, undefined, or invalid
+      if (urlStr && urlStr !== "" && urlStr !== "null" && urlStr !== "undefined") {
+        // Try to validate URL - only add if valid
         try {
-          new URL(urlStr);
-          // If URL is valid, keep it
-          cleaned.url = urlStr;
+          const url = new URL(urlStr);
+          // Ensure it's http or https
+          if (url.protocol === "http:" || url.protocol === "https:") {
+            cleaned.url = urlStr;
+          }
+          // If protocol is invalid, don't add url field
         } catch {
-          // Invalid URL, remove it
-          delete cleaned.url;
+          // Invalid URL, don't add url field
         }
       }
     }
@@ -98,14 +102,24 @@ export async function runResearchAgent(intake: Intake): Promise<MarketSummary> {
     ],
   );
 
-  const output = result.finalOutput;
+  let output = result.finalOutput;
   if (!output) {
     throw new Error("ResearchAgent did not produce a final output");
+  }
+
+  // Handle case where output might be a string (JSON string)
+  if (typeof output === "string") {
+    try {
+      output = JSON.parse(output);
+    } catch (e) {
+      throw new Error(`ResearchAgent output is not valid JSON: ${e}`);
+    }
   }
 
   // Clean invalid URLs before validation
   const cleanedOutput = cleanCompetitorUrls(output);
   
+  // Validate with schema after cleaning
   return MarketSummarySchema.parse(cleanedOutput);
 }
 
