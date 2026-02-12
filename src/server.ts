@@ -6,7 +6,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 8787;
+const PORT = Number(process.env.PORT) || 8787;
 
 // Middleware
 app.use(cors());
@@ -45,6 +45,6 @@ app.post("/finalize", async (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Brand Studio API server running on port ${PORT}`);
 });
