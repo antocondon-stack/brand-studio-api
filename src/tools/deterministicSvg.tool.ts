@@ -34,7 +34,7 @@ function pick<T>(items: T[], seed: number): T {
   return items[index]!; // Safe because we checked length > 0
 }
 
-function buildDeterministicSvgs(input: DeterministicSvgInput) {
+export function buildDeterministicSvgs(input: DeterministicSvgInput) {
   const key = JSON.stringify(input);
   const seed = hashString(key);
 

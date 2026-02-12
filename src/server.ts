@@ -2,7 +2,8 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { generate } from "./pipeline/generate";
-import { IntakeSchema } from "./schemas";
+import { finalize } from "./pipeline/finalize";
+import { IntakeSchema, FinalizeRequestSchema } from "./schemas";
 
 // Load environment variables
 dotenv.config();
@@ -70,14 +71,40 @@ app.post("/generate", async (req, res) => {
   }
 });
 
-// Finalize endpoint - placeholder for now
+// Finalize endpoint
 app.post("/finalize", async (req, res) => {
   try {
-    // TODO: Implement finalize pipeline
-    res.status(501).json({ error: "Finalize endpoint not yet implemented" });
+    console.log("📥 Received finalize request");
+    
+    // Validate request body
+    const request = FinalizeRequestSchema.parse(req.body);
+    console.log("✅ Finalize request validated, chosen direction:", request.chosen_direction.id);
+
+    // Run finalize pipeline
+    const result = await finalize(request);
+    
+    console.log("✅ Finalize pipeline completed successfully");
+    res.json(result);
   } catch (error) {
-    console.error("Finalize error:", error);
-    res.status(500).json({ error: "Internal server error" });
+    console.error("❌ Finalize error:", error);
+    
+    if (error instanceof Error) {
+      // Handle validation errors
+      if (error.name === "ZodError") {
+        res.status(400).json({ 
+          error: "Invalid request", 
+          details: error.message 
+        });
+        return;
+      }
+      
+      res.status(500).json({ 
+        error: "Internal server error", 
+        message: error.message 
+      });
+    } else {
+      res.status(500).json({ error: "Internal server error" });
+    }
   }
 });
 
