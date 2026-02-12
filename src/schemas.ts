@@ -85,10 +85,28 @@ export const CreativeDirectionsSchema = z
   .array(CreativeDirectionSchema)
   .length(3);
 
-// Final kit produced by ExecutorAgent
+// Concept artist: single concept metadata + optional base64 preview
+export const LogoConceptSchema = z.object({
+  id: z.number(),
+  motif_family: z.enum(["loop", "interlock", "orbit", "fold", "swap"]),
+  composition: z.string().min(1),
+  description: z.string().optional(),
+  preview_base64: z.string().optional(),
+});
+
+export type LogoConcept = z.infer<typeof LogoConceptSchema>;
+
+// Final kit produced by ExecutorAgent (endpoint-compatible: existing fields required, new optional)
 export const FinalKitSchema = z.object({
   logo_svg_wordmark: z.string().min(1),
   logo_svg_mark: z.string().min(1),
+  selected_concept_preview: z.string().optional(),
+  selected_concept_metadata: z
+    .object({
+      motif_family: z.string(),
+      composition: z.string(),
+    })
+    .optional(),
   palette: z
     .array(
       z.object({
@@ -138,4 +156,23 @@ export const FinalizeRequestSchema = z.object({
 });
 
 export type FinalizeRequest = z.infer<typeof FinalizeRequestSchema>;
+
+// Logo critic output (LogoCriticAgent)
+export const LogoCriticScoresSchema = z.object({
+  on_brief: z.number().min(0).max(100),
+  distinctiveness: z.number().min(0).max(100),
+  craft: z.number().min(0).max(100),
+  scalability: z.number().min(0).max(100),
+  cliche_risk: z.number().min(0).max(100),
+  ai_look_risk: z.number().min(0).max(100),
+});
+
+export const LogoCriticOutputSchema = z.object({
+  scores: LogoCriticScoresSchema,
+  issues: z.array(z.string().min(1)),
+  actions: z.array(z.string().min(1)),
+  pass: z.boolean(),
+});
+
+export type LogoCriticOutput = z.infer<typeof LogoCriticOutputSchema>;
 

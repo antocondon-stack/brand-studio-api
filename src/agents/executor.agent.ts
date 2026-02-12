@@ -4,6 +4,7 @@ import {
   FinalKitSchema,
   type FinalKit,
   type FinalizeRequest,
+  type LogoConcept,
 } from "../schemas";
 import { buildDeterministicSvgs } from "../tools/deterministicSvg.tool";
 import {
@@ -82,7 +83,11 @@ Constraints:
   outputType: ExecutorOutputSchema,
 });
 
-export async function runExecutorAgent(request: FinalizeRequest): Promise<FinalKit> {
+export async function runExecutorAgent(
+  request: FinalizeRequest,
+  criticActions?: string[],
+  selectedConcept?: LogoConcept | null,
+): Promise<FinalKit> {
   const { intake, chosen_direction } = request;
 
   // Step 1: Generate logos using deterministic SVG function
@@ -112,14 +117,11 @@ export async function runExecutorAgent(request: FinalizeRequest): Promise<FinalK
     tracking: 0, // Default tracking, can be adjusted based on creative direction
   });
 
-  // Step 1.5: Generate motif mark candidates
-  console.log("🎯 Generating motif candidates...");
+  // Step 1.5: Generate motif mark (use selected concept's motif family when provided)
+  console.log("🎯 Generating motif mark...");
   
-  // Extract distinctiveness hook from creative direction
-  // Use one_liner and narrative as the distinctiveness indicator
+  const seed = intake.brand_name.length + chosen_direction.name.length;
   const distinctivenessHook = `${chosen_direction.one_liner} ${chosen_direction.narrative}`.toLowerCase();
-  
-  // Generate 3 motif candidates from different families
   const motifFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap"> = [
     "loop",
     "interlock",
@@ -127,81 +129,69 @@ export async function runExecutorAgent(request: FinalizeRequest): Promise<FinalK
     "fold",
     "swap",
   ];
-  
-  // Select 3 different families based on seed
-  const seed = intake.brand_name.length + chosen_direction.name.length;
-  const selectedFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap"> = [];
-  const usedIndices = new Set<number>();
-  
-  for (let i = 0; i < 3; i++) {
-    let idx = (seed + i * 7) % motifFamilies.length;
-    while (usedIndices.has(idx)) {
-      idx = (idx + 1) % motifFamilies.length;
+
+  let motifFamily: "loop" | "interlock" | "orbit" | "fold" | "swap";
+  if (selectedConcept && motifFamilies.includes(selectedConcept.motif_family as typeof motifFamily)) {
+    motifFamily = selectedConcept.motif_family as typeof motifFamily;
+    console.log(`✅ Using selected concept motif: ${motifFamily}`);
+  } else {
+    const selectedFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap"> = [];
+    const usedIndices = new Set<number>();
+    for (let i = 0; i < 3; i++) {
+      let idx = (seed + i * 7) % motifFamilies.length;
+      while (usedIndices.has(idx)) {
+        idx = (idx + 1) % motifFamilies.length;
+      }
+      usedIndices.add(idx);
+      const family = motifFamilies[idx];
+      if (family) selectedFamilies.push(family);
     }
-    usedIndices.add(idx);
-    const family = motifFamilies[idx];
-    if (family) {
-      selectedFamilies.push(family);
-    }
-  }
-  
-  // Ensure we have at least 3 families (fallback if needed)
-  while (selectedFamilies.length < 3) {
-    const fallbackFamily = motifFamilies[selectedFamilies.length % motifFamilies.length];
-    if (fallbackFamily && !selectedFamilies.includes(fallbackFamily)) {
-      selectedFamilies.push(fallbackFamily);
-    } else {
-      selectedFamilies.push("loop"); // Default fallback
-      break;
-    }
-  }
-  
-  // Generate and score motif candidates
-  const motifCandidates = selectedFamilies.map((family, index) => {
-    const motifPath = generateMotifMark({
-      family,
-      strokeWidth: 2,
-      cornerRadius: 2,
-      gridSize: 24,
-      seed: seed + index,
+    const motifCandidates = selectedFamilies.map((family) => {
+      const score = scoreMotifDistinctiveness(family, distinctivenessHook);
+      return { family, score };
     });
-    
-    const motifSvg = createMotifMarkSVG(motifPath, 24, defaultPalette[0]);
-    const score = scoreMotifDistinctiveness(family, distinctivenessHook);
-    
-    return {
-      family,
-      svg: motifSvg,
-      score,
-    };
-  });
-  
-  // Select the strongest motif based on distinctiveness score
-  if (motifCandidates.length === 0) {
-    throw new Error("No motif candidates generated");
+    const first = motifCandidates[0];
+    const best = first && motifCandidates.length > 0
+      ? motifCandidates.reduce((a, c) => (c.score > a.score ? c : a), first)
+      : { family: "loop" as const, score: 0 };
+    motifFamily = best.family;
+    console.log(`✅ Selected motif: ${motifFamily}`);
   }
-  
-  const strongestMotif = motifCandidates.reduce((best, current) =>
-    current.score > best.score ? current : best,
-  );
-  
-  console.log(`✅ Selected motif: ${strongestMotif.family} (score: ${strongestMotif.score})`);
+
+  const motifPath = generateMotifMark({
+    family: motifFamily,
+    strokeWidth: 2,
+    cornerRadius: 2,
+    gridSize: 24,
+    seed,
+  });
+  const strongestMotif = { svg: createMotifMarkSVG(motifPath, 24, defaultPalette[0]) };
 
   // Step 2: Run Executor Agent to get palette, fonts, and templates
   console.log("📦 Running Executor Agent...");
   
+  const executorPrompt = [
+    "You are given a chosen creative direction.",
+    "Generate a complete brand kit: color palette, typography, and templates.",
+    "",
+    "Chosen Direction JSON:",
+    JSON.stringify(chosen_direction, null, 2),
+  ];
+
+  if (criticActions && criticActions.length > 0) {
+    executorPrompt.push(
+      "",
+      "Apply these critic actions to improve the kit:",
+      criticActions.map((a) => `- ${a}`).join("\n"),
+    );
+  }
+
   const result = await run(
     ExecutorAgent,
     [
       {
         role: "user",
-        content: [
-          "You are given a chosen creative direction.",
-          "Generate a complete brand kit: color palette, typography, and templates.",
-          "",
-          "Chosen Direction JSON:",
-          JSON.stringify(chosen_direction, null, 2),
-        ].join("\n"),
+        content: executorPrompt.join("\n"),
       },
     ],
   );
@@ -214,8 +204,6 @@ export async function runExecutorAgent(request: FinalizeRequest): Promise<FinalK
   const executorOutput = ExecutorOutputSchema.parse(output);
 
   // Combine logos with executor output
-  // Note: Motif mark is generated but not included in FinalKit schema to maintain endpoint structure
-  // It can be added to templates or used separately if needed
   const finalKit: FinalKit = {
     logo_svg_wordmark: logos.logo_svg_wordmark,
     logo_svg_mark: logos.logo_svg_mark,
@@ -224,8 +212,15 @@ export async function runExecutorAgent(request: FinalizeRequest): Promise<FinalK
     templates: executorOutput.templates,
   };
 
-  // Log motif for debugging (not included in response to maintain endpoint structure)
-  console.log(`🎨 Generated motif mark (${strongestMotif.family}):`, strongestMotif.svg.substring(0, 100) + "...");
+  if (selectedConcept) {
+    if (selectedConcept.preview_base64) {
+      finalKit.selected_concept_preview = selectedConcept.preview_base64;
+    }
+    finalKit.selected_concept_metadata = {
+      motif_family: selectedConcept.motif_family,
+      composition: selectedConcept.composition,
+    };
+  }
 
   return FinalKitSchema.parse(finalKit);
 }
