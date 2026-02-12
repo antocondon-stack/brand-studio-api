@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { tool } from "@openai/agents";
+import { textToPath } from "./fontToPath.tool";
 
 const DeterministicSvgInputSchema = z.object({
   brand_name: z.string().min(1),
@@ -9,9 +10,10 @@ const DeterministicSvgInputSchema = z.object({
   palette_hex: z.array(
     z
       .string()
-      .regex(/^#(?:[0-9a-fA-F]{3}){3}$/, "Expected 6-digit hex color"),
+      .regex(/^#(?:[0-9a-fA-F]{3}){1,2}$/, "Expected a hex color"),
   ),
   vibe: z.string().min(1),
+  tracking: z.number().optional().default(0), // Letter spacing in em units
 });
 
 type DeterministicSvgInput = z.infer<typeof DeterministicSvgInputSchema>;
@@ -40,92 +42,116 @@ export function buildDeterministicSvgs(input: DeterministicSvgInput) {
 
   const width = 640;
   const height = 320;
+  const tracking = input.tracking ?? 0;
 
+  // Select colors from palette
   const [primary, secondary, accent] = [
     input.palette_hex[seed % input.palette_hex.length],
     input.palette_hex[(seed + 1) % input.palette_hex.length],
     input.palette_hex[(seed + 2) % input.palette_hex.length],
   ];
 
-  const radii = [4, 6, 8, 10];
-  const radius = pick(radii, seed);
+  // Determine font family based on archetype
+  const fontFamily = input.logo_archetype.includes("serif") || 
+                     input.logo_archetype.includes("display") 
+                     ? "DM Serif Display" 
+                     : "Inter";
+  const fontWeight = 700; // Bold for logos
 
+  // Generate wordmark text path (start at 0,0 for proper measurement)
+  const wordmarkPath = textToPath({
+    text: input.brand_name,
+    fontFamily: fontFamily as "Inter" | "DM Serif Display",
+    fontSize: 32,
+    fontWeight,
+    tracking,
+    x: 0,
+    y: 0,
+  });
+
+  // Wordmark SVG (centered, no gradients)
   const wordmarkSvg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${input.brand_name} wordmark">
-  <defs>
-    <linearGradient id="grad-${seed}" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="${primary}" />
-      <stop offset="100%" stop-color="${secondary}" />
-    </linearGradient>
-  </defs>
-  <rect width="${width}" height="${height}" rx="${radius}" fill="#050608" />
-  <rect x="24" y="${height / 2 - 32}" width="${width - 48}" height="64" rx="${radius}" fill="url(#grad-${seed})" />
-  <text
-    x="${width / 2}"
-    y="${height / 2 + 8}"
-    text-anchor="middle"
-    font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-    font-weight="700"
-    font-size="32"
-    fill="#ffffff"
-  >
-    ${input.brand_name}
-  </text>
-  <text
-    x="32"
-    y="${height - 28}"
-    text-anchor="start"
-    font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-    font-weight="400"
-    font-size="12"
-    fill="${accent}"
-  >
-    ${input.direction_name} • ${input.logo_archetype} • ${input.vibe}
-  </text>
+  <g transform="translate(${width / 2}, ${height / 2 + 8})" text-anchor="middle">
+    <path d="${wordmarkPath}" fill="${primary}" />
+  </g>
 </svg>`.trim();
 
+  // Mark SVG (symbol/icon)
   const circleRadius = 72 + (seed % 16);
+  const initialChar = input.brand_name[0]?.toUpperCase() ?? "?";
+  
+  const markPath = textToPath({
+    text: initialChar,
+    fontFamily: fontFamily as "Inter" | "DM Serif Display",
+    fontSize: 64,
+    fontWeight,
+    tracking: 0,
+    x: 0,
+    y: 0,
+  });
 
   const markSvg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${width}" viewBox="0 0 ${width} ${width}" role="img" aria-label="${input.brand_name} mark">
-  <defs>
-    <radialGradient id="blob-${seed}" cx="50%" cy="35%" r="75%">
-      <stop offset="0%" stop-color="${accent}" />
-      <stop offset="60%" stop-color="${secondary}" />
-      <stop offset="100%" stop-color="#050608" />
-    </radialGradient>
-  </defs>
-  <rect width="${width}" height="${width}" fill="#050608" />
   <circle
     cx="${width / 2}"
     cy="${width / 2}"
     r="${circleRadius}"
-    fill="url(#blob-${seed})"
+    fill="${accent}"
   />
-  <text
-    x="${width / 2}"
-    y="${width / 2 + 10}"
-    text-anchor="middle"
-    font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-    font-weight="700"
-    font-size="64"
-    letter-spacing="4"
-    fill="#ffffff"
-  >
-    ${input.brand_name[0] ?? "?"}
-  </text>
+  <g transform="translate(${width / 2}, ${width / 2 + 10})" text-anchor="middle">
+    <path d="${markPath}" fill="${secondary}" />
+  </g>
+</svg>`.trim();
+
+  // Horizontal lockup (wordmark + mark side by side, no gradients)
+  const horizontalLockupWidth = width * 1.5;
+  const horizontalLockupSvg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${horizontalLockupWidth}" height="${height}" viewBox="0 0 ${horizontalLockupWidth} ${height}" role="img" aria-label="${input.brand_name} horizontal lockup">
+  <circle
+    cx="${circleRadius + 10}"
+    cy="${height / 2}"
+    r="${circleRadius}"
+    fill="${accent}"
+  />
+  <g transform="translate(${circleRadius + 10}, ${height / 2 + 10})" text-anchor="middle">
+    <path d="${markPath}" fill="${secondary}" />
+  </g>
+  <g transform="translate(${circleRadius * 2 + 30}, ${height / 2 + 8})">
+    <path d="${wordmarkPath}" fill="${primary}" />
+  </g>
+</svg>`.trim();
+
+  // Stacked lockup (mark above wordmark, no gradients)
+  const stackedHeight = height + width / 2;
+  const stackedLockupSvg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${stackedHeight}" viewBox="0 0 ${width} ${stackedHeight}" role="img" aria-label="${input.brand_name} stacked lockup">
+  <circle
+    cx="${width / 2}"
+    cy="${circleRadius + 20}"
+    r="${circleRadius}"
+    fill="${accent}"
+  />
+  <g transform="translate(${width / 2}, ${circleRadius + 30})" text-anchor="middle">
+    <path d="${markPath}" fill="${secondary}" />
+  </g>
+  <g transform="translate(${width / 2}, ${circleRadius * 2 + 60})" text-anchor="middle">
+    <path d="${wordmarkPath}" fill="${primary}" />
+  </g>
 </svg>`.trim();
 
   return {
     logo_svg_wordmark: wordmarkSvg,
     logo_svg_mark: markSvg,
+    logo_svg_horizontal: horizontalLockupSvg,
+    logo_svg_stacked: stackedLockupSvg,
   };
 }
 
 export const deterministicSvgLogoTool = tool({
   name: "deterministic_svg_logo",
   description:
-    "Generate a deterministic SVG logo wordmark and mark for the given brand and creative direction.",
+    "Generate deterministic SVG logos with font paths (wordmark, mark, horizontal and stacked lockups) for the given brand and creative direction.",
   parameters: DeterministicSvgInputSchema,
   async execute(args) {
     const input = DeterministicSvgInputSchema.parse(args);
@@ -133,4 +159,3 @@ export const deterministicSvgLogoTool = tool({
     return JSON.stringify(result);
   },
 });
-

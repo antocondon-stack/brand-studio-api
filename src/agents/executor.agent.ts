@@ -104,6 +104,7 @@ export async function runExecutorAgent(request: FinalizeRequest): Promise<FinalK
     keywords: chosen_direction.color_keywords,
     palette_hex: defaultPalette,
     vibe: chosen_direction.one_liner,
+    tracking: 0, // Default tracking, can be adjusted based on creative direction
   });
 
   // Step 2: Run Executor Agent to get palette, fonts, and templates
