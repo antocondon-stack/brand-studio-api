@@ -8,6 +8,9 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT) || 8787;
 
+// Log port configuration for debugging
+console.log(`Port configuration: ${process.env.PORT ? `Using Railway PORT: ${process.env.PORT}` : `Using fallback PORT: ${PORT}`}`);
+
 // Middleware
 app.use(cors());
 app.use(express.json());
