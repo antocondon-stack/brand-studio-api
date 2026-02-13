@@ -168,48 +168,49 @@ function buildOrbit(
   useFill: boolean = true,
 ): string {
   const c = grid / 2;
-  const r1 = grid * 0.36;
-  const r2 = grid * 0.24;
-  const gapAngle = Math.PI / 3; // 60 degree gap
+  const bandWidth = grid * 0.12; // Ribbon band width
+  const outerSize = grid * 0.42;
+  const innerSize = outerSize - bandWidth * 2;
+  const gapSize = grid * 0.1; // Gap cut size
+  const r = Math.min(cornerRadiusPx, outerSize / 4);
   
   if (useFill) {
-    // First crescent: outer arc band with inner arc cutout
-    const outer1Start = -Math.PI / 2 + gapAngle / 2;
-    const outer1End = Math.PI / 2 - gapAngle / 2;
+    // First crescent: rounded rect loop with gap (top-right quadrant)
+    const outer1X = c - outerSize / 2;
+    const outer1Y = c - outerSize / 2;
+    const outer1Path = roundedRectPath(outer1X, outer1Y, outerSize, outerSize, r);
     
-    const x1oStart = c + r1 * Math.cos(outer1Start);
-    const y1oStart = c + r1 * Math.sin(outer1Start);
-    const x1oEnd = c + r1 * Math.cos(outer1End);
-    const y1oEnd = c + r1 * Math.sin(outer1End);
+    const inner1X = c - innerSize / 2;
+    const inner1Y = c - innerSize / 2;
+    const inner1Path = roundedRectPath(inner1X, inner1Y, innerSize, innerSize, Math.max(0, r - bandWidth / 2));
     
-    const x1iStart = c + r2 * Math.cos(outer1Start);
-    const y1iStart = c + r2 * Math.sin(outer1Start);
-    const x1iEnd = c + r2 * Math.cos(outer1End);
-    const y1iEnd = c + r2 * Math.sin(outer1End);
+    // Gap cut for first crescent (top-right corner)
+    const gap1X = c + outerSize / 2 - gapSize;
+    const gap1Y = c - outerSize / 2;
+    const gap1Path = roundedRectPath(gap1X, gap1Y, gapSize, gapSize, 0);
     
-    // Outer arc + line to inner + inner arc (reverse) + line back
-    const crescent1 = `M ${x1oStart} ${y1oStart} A ${r1} ${r1} 0 0 1 ${x1oEnd} ${y1oEnd} L ${x1iEnd} ${y1iEnd} A ${r2} ${r2} 0 0 0 ${x1iStart} ${y1iStart} Z`;
+    // Second crescent: rounded rect loop with gap (bottom-left quadrant, offset)
+    const offset = grid * 0.08;
+    const outer2X = c - outerSize / 2 - offset;
+    const outer2Y = c - outerSize / 2 + offset;
+    const outer2Path = roundedRectPath(outer2X, outer2Y, outerSize, outerSize, r);
     
-    // Second crescent: offset by 180 degrees
-    const outer2Start = Math.PI / 2 + gapAngle / 2;
-    const outer2End = -Math.PI / 2 - gapAngle / 2;
+    const inner2X = c - innerSize / 2 - offset;
+    const inner2Y = c - innerSize / 2 + offset;
+    const inner2Path = roundedRectPath(inner2X, inner2Y, innerSize, innerSize, Math.max(0, r - bandWidth / 2));
     
-    const x2oStart = c + r1 * Math.cos(outer2Start);
-    const y2oStart = c + r1 * Math.sin(outer2Start);
-    const x2oEnd = c + r1 * Math.cos(outer2End);
-    const y2oEnd = c + r1 * Math.sin(outer2End);
+    // Gap cut for second crescent (bottom-left corner)
+    const gap2X = c - outerSize / 2 - offset;
+    const gap2Y = c + outerSize / 2 - gapSize + offset;
+    const gap2Path = roundedRectPath(gap2X, gap2Y, gapSize, gapSize, 0);
     
-    const x2iStart = c + r2 * Math.cos(outer2Start);
-    const y2iStart = c + r2 * Math.sin(outer2Start);
-    const x2iEnd = c + r2 * Math.cos(outer2End);
-    const y2iEnd = c + r2 * Math.sin(outer2End);
-    
-    const crescent2 = `M ${x2oStart} ${y2oStart} A ${r1} ${r1} 0 0 1 ${x2oEnd} ${y2oEnd} L ${x2iEnd} ${y2iEnd} A ${r2} ${r2} 0 0 0 ${x2iStart} ${y2iStart} Z`;
-    
-    return `${crescent1} ${crescent2}`;
+    // Combine: outer paths - inner paths - gap cuts (even-odd creates crescents)
+    return `${outer1Path} ${inner1Path} ${gap1Path} ${outer2Path} ${inner2Path} ${gap2Path}`;
   } else {
-    // Stroke version: partial arcs with gaps
-    return `M ${c} ${c - r1} A ${r1} ${r1} 0 0 1 ${c + r1 * 0.7} ${c} M ${c} ${c + r2} A ${r2} ${r2} 0 0 0 ${c - r2 * 0.7} ${c}`;
+    // Stroke version: partial rounded rects with gaps
+    const s = outerSize / 2;
+    const offset = grid * 0.08;
+    return `M ${c - s} ${c - s} L ${c + s - gapSize} ${c - s} M ${c + s} ${c - s} L ${c + s} ${c + s} L ${c - s} ${c + s} L ${c - s} ${c - s} M ${c - s - offset} ${c - s + offset} L ${c + s - gapSize - offset} ${c - s + offset} M ${c + s - offset} ${c - s + offset} L ${c + s - offset} ${c + s + offset} L ${c - s - offset} ${c + s + offset} L ${c - s - offset} ${c - s + offset}`;
   }
 }
 
@@ -348,9 +349,30 @@ function buildMonogramInterlock(
         })
       : path1;
   } catch {
-    const r = grid * 0.36;
-    path1 = `M ${c - r} ${c} A ${r} ${r} 0 1 1 ${c + r} ${c} A ${r} ${r} 0 1 1 ${c - r} ${c}`;
-    path2 = `M ${c} ${c - r} A ${r} ${r} 0 1 1 ${c} ${c + r} A ${r} ${r} 0 1 1 ${c} ${c - r}`;
+    // Fallback: use ribbon-style rounded rect loops instead of circles
+    const bandWidth = grid * 0.12;
+    const outerSize = grid * 0.36;
+    const innerSize = outerSize - bandWidth * 2;
+    const r = Math.min(4, outerSize / 4);
+    
+    // First initial: rounded rect loop
+    const outer1X = c - outerSize / 2 - grid * 0.1;
+    const outer1Y = c - outerSize / 2;
+    const outer1Path = roundedRectPath(outer1X, outer1Y, outerSize, outerSize, r);
+    const inner1X = outer1X + bandWidth;
+    const inner1Y = outer1Y + bandWidth;
+    const inner1Path = roundedRectPath(inner1X, inner1Y, innerSize, innerSize, Math.max(0, r - bandWidth / 2));
+    
+    // Second initial: rounded rect loop (offset)
+    const outer2X = c - outerSize / 2 + grid * 0.1;
+    const outer2Y = c - outerSize / 2;
+    const outer2Path = roundedRectPath(outer2X, outer2Y, outerSize, outerSize, r);
+    const inner2X = outer2X + bandWidth;
+    const inner2Y = outer2Y + bandWidth;
+    const inner2Path = roundedRectPath(inner2X, inner2Y, innerSize, innerSize, Math.max(0, r - bandWidth / 2));
+    
+    path1 = `${outer1Path} ${inner1Path}`;
+    path2 = `${outer2Path} ${inner2Path}`;
     return path1 + " " + path2;
   }
   if (!useTwo) return path1;
@@ -431,12 +453,39 @@ ${pathContent}
   const circleCount = (mark_svg.match(/<circle/g) || []).length;
   const pathCount = (mark_svg.match(/<path/g) || []).length;
   
+  // Check for full ring patterns (A r r 0 1 1 repeated)
+  const fullRingPattern = /A\s+\d+\.?\d*\s+\d+\.?\d*\s+0\s+1\s+1/g;
+  const ringMatches = mark_svg.match(fullRingPattern);
+  const ringCount = ringMatches ? ringMatches.length : 0;
+  
+  if (ringCount >= 3) {
+    console.warn(`⚠️  Warning: Mark contains ${ringCount} full ring pattern(s) - falling back to fold or swap`);
+    // Fallback: regenerate with fold or swap
+    const fallbackFamily = input.motif_family === "orbit" ? "fold" : "swap";
+    const fallbackPath = buildMarkPath({ ...input, motif_family: fallbackFamily });
+    const fallbackContent = Array.isArray(fallbackPath)
+      ? fallbackPath.map((p) => `  <path d="${p.d}" ${pathAttrs} transform="${p.transform}" />`).join("\n")
+      : `  <path d="${fallbackPath}" ${pathAttrs} />`;
+    const fallbackSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${grid}" height="${grid}" viewBox="0 0 ${grid} ${grid}" role="img" aria-label="${input.brand_name} mark">
+${fallbackContent}
+</svg>`.trim();
+    return {
+      mark_svg: fallbackSvg,
+      construction: { grid, stroke_px: effectiveStrokePx, corner_radius_px },
+    };
+  }
+  
   if (circleCount > 0) {
     console.warn(`⚠️  Warning: Mark contains ${circleCount} circle(s) - should use tension-based geometry`);
   }
   
+  // Check for multiple subpaths (M commands) in compound paths
+  const moveCommandCount = (mark_svg.match(/\bM\s+[-\d.]+\s+[-\d.]+/g) || []).length;
   if (pathCount < 2 && input.motif_family !== "monogram-interlock") {
     console.warn(`⚠️  Warning: Mark has only ${pathCount} path(s) - may lack visual weight`);
+  }
+  if (moveCommandCount < 2 && input.motif_family !== "monogram-interlock") {
+    console.warn(`⚠️  Warning: Mark has only ${moveCommandCount} subpath(s) - may lack visual weight`);
   }
 
   return {

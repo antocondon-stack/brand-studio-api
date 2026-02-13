@@ -408,7 +408,8 @@ export async function runExecutorAgent(
     current.score > best.score ? current : best
   );
   
-  console.log(`✅ Selected motif mark: family=${bestCandidate.family}, variant=${bestCandidate.variant}, stroke_px=${bestCandidate.stroke_px}, score=${bestCandidate.score}`);
+  console.log(`✅ Selected motif mark: family=${bestCandidate.family}, variant=${bestCandidate.variant}, use_fill=${bestCandidate.use_fill}, stroke_px=${bestCandidate.stroke_px}, score=${bestCandidate.score}`);
+  console.log(`🔗 Lockups built from motif mark (not legacy circle badge)`);
   
   // Sanity assert: no <text> in mark
   if (bestCandidate.result.mark_svg.includes("<text")) {
