@@ -38,6 +38,12 @@ function getWordmarkFont(input: DeterministicSvgInput): FontName {
     : "inter_bold";
 }
 
+/** Ensure path d is safe for SVG attribute (no broken markup). */
+function safePathD(pathD: string): string {
+  if (!pathD || typeof pathD !== "string") return "M 0 0";
+  return pathD.replace(/"/g, "'").trim() || "M 0 0";
+}
+
 /** Readability heuristic: prefer aspect ratio not too wide (spread out) or too tight. */
 function scoreReadability(
   out: FontToPathOutput,
@@ -89,7 +95,7 @@ export function buildDeterministicSvgs(input: DeterministicSvgInput) {
             : b,
         )
       : wordmarkVariants[0]!;
-  const wordmarkPath = bestWordmark.path_d;
+  const wordmarkPath = safePathD(bestWordmark.path_d);
   const wordmarkBounds = {
     x1: parseFloat(bestWordmark.viewBox.split(/\s+/)[0] ?? "0"),
     y1: parseFloat(bestWordmark.viewBox.split(/\s+/)[1] ?? "0"),
@@ -115,7 +121,7 @@ export function buildDeterministicSvgs(input: DeterministicSvgInput) {
     font_size: 64,
     tracking_px: 0,
   });
-  const markPath = markPathOut.path_d;
+  const markPath = safePathD(markPathOut.path_d);
   const markBounds = {
     x1: parseFloat(markPathOut.viewBox.split(/\s+/)[0] ?? "0"),
     y1: parseFloat(markPathOut.viewBox.split(/\s+/)[1] ?? "0"),
