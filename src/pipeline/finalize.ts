@@ -12,8 +12,11 @@ import {
 import { runExecutorAgent } from "../agents/executor.agent";
 import { runLogoCriticAgent, runLogoCriticAgentForConcept, conceptScoreFromCritic } from "../agents/logoCritic.agent";
 import { runConceptArtistAgent } from "../agents/conceptArtist.agent";
+import { runCDConstraintCompiler } from "../agents/cdConstraintCompiler.agent";
+import { runComparativeConceptCritic } from "../agents/comparativeConceptCritic.agent";
 import { buildGuidelinesPdf } from "../pdf/guidelines";
 import { storeGuidelinesPdf } from "../pdf/store";
+import type { CDConstraints, ComparativeCritique } from "../schemas";
 
 const MAX_ITERATIONS = 2;
 
@@ -35,9 +38,24 @@ export async function finalize(request: FinalizeRequest): Promise<FinalizeRespon
   console.log("regen_seed:", runSeed, "(reproducible output per customer)");
 
   let selectedConcept: LogoConcept | null = null;
+  let cdConstraints: CDConstraints | null = null;
+  let executionDirectives: ComparativeCritique["execution_directives"] | null = null;
 
+  // Step 0: Always run CD Constraint Compiler (unless regen=true, reuse constraints if available)
   if (!regen) {
     console.log("🎯 Running Finalize Pipeline...");
+    console.log("📋 Step 0: Compiling CD constraints...");
+    try {
+      cdConstraints = await runCDConstraintCompiler(intake.brand_name, safeRequest.brand_strategy, chosen_direction);
+      console.log(`✅ CD Constraints compiled: ${cdConstraints.motif_family_priority.length} motif priorities, ${cdConstraints.distinctiveness_hook_checks.length} hook checks`);
+    } catch (e) {
+      console.warn("CD Constraint Compiler failed, continuing without constraints:", e);
+    }
+  } else {
+    console.log("🎯 Regeneration: skipping constraint compilation (reuse from previous run if available)");
+  }
+
+  if (!regen) {
     // 1) Generate concepts (skip when regen=true)
     console.log("🎨 Step 1: Generating concepts...");
     let concepts: LogoConcept[];
@@ -52,9 +70,41 @@ export async function finalize(request: FinalizeRequest): Promise<FinalizeRespon
       concepts = [];
     }
 
-    // 2) Score concepts; 3) Select top concept
-    if (concepts.length > 0) {
-      console.log("🔍 Step 2: Scoring concepts...");
+    // 2) Comparative concept critique (replaces simple scoring)
+    if (concepts.length > 0 && cdConstraints) {
+      console.log("🔍 Step 2: Comparative concept critique...");
+      try {
+        const comparativeCritique = await runComparativeConceptCritic(
+          intake.brand_name,
+          chosen_direction,
+          cdConstraints,
+          concepts,
+        );
+        const selectedConceptId = comparativeCritique.selected_concept_id;
+        selectedConcept = concepts.find((c) => c.id === selectedConceptId) ?? concepts[0] ?? null;
+        executionDirectives = comparativeCritique.execution_directives;
+        console.log(`✅ Step 3: Selected concept id=${selectedConceptId} via comparative critique`);
+        console.log(`   Execution directives: motif=${executionDirectives.motif_family}, variants=${executionDirectives.variant_targets.join(",")}, adjustments=${executionDirectives.geometry_adjustments.length}`);
+      } catch (e) {
+        console.warn("Comparative concept critique failed, falling back to simple scoring:", e);
+        // Fallback to simple scoring
+        const scores = await Promise.all(
+          concepts.map((c) =>
+            runLogoCriticAgentForConcept(c, intake.brand_name, chosen_direction.name).then((out) => ({
+              concept: c,
+              score: conceptScoreFromCritic(out),
+            })),
+          ),
+        );
+        if (scores.length > 0) {
+          const top = scores.reduce((best, s) => (s.score > best.score ? s : best), scores[0]!);
+          selectedConcept = top.concept;
+          console.log(`✅ Step 3: Selected concept id=${selectedConcept.id} (fallback scoring)`);
+        }
+      }
+    } else if (concepts.length > 0) {
+      // Fallback: simple scoring if no constraints
+      console.log("🔍 Step 2: Scoring concepts (no constraints available)...");
       const scores = await Promise.all(
         concepts.map((c) =>
           runLogoCriticAgentForConcept(c, intake.brand_name, chosen_direction.name).then((out) => ({
@@ -66,7 +116,7 @@ export async function finalize(request: FinalizeRequest): Promise<FinalizeRespon
       if (scores.length > 0) {
         const top = scores.reduce((best, s) => (s.score > best.score ? s : best), scores[0]!);
         selectedConcept = top.concept;
-        console.log(`✅ Step 3: Selected concept id=${selectedConcept.id} (motif=${selectedConcept.motif_family}, composition=${selectedConcept.composition})`);
+        console.log(`✅ Step 3: Selected concept id=${selectedConcept.id} (simple scoring)`);
       }
     }
   } else {
@@ -86,16 +136,22 @@ export async function finalize(request: FinalizeRequest): Promise<FinalizeRespon
       criticResult?.pass === false ? criticResult.actions : undefined,
       selectedConcept ?? undefined,
       runSeed,
+      cdConstraints ?? undefined,
+      executionDirectives ?? undefined,
     );
 
-    console.log("🔍 Running final Logo Critic...");
-    const criticOutput = await runLogoCriticAgent({
+    console.log("🔍 Running final Logo Critic (strategic alignment audit)...");
+    const criticInput: Parameters<typeof runLogoCriticAgent>[0] = {
       logo_svg_wordmark: finalKit.logo_svg_wordmark,
       logo_svg_mark: finalKit.logo_svg_mark,
       palette: finalKit.palette,
       chosen_direction_name: chosen_direction.name,
       brand_name: intake.brand_name,
-    });
+    };
+    if (cdConstraints) {
+      criticInput.cd_constraints = cdConstraints;
+    }
+    const criticOutput = await runLogoCriticAgent(criticInput);
 
     console.log(
       `   Critic: pass=${criticOutput.pass} scores=${JSON.stringify(criticOutput.scores)}`,

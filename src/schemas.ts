@@ -265,3 +265,97 @@ export const LogoCriticOutputSchema = z.object({
 
 export type LogoCriticOutput = z.infer<typeof LogoCriticOutputSchema>;
 
+// CD Constraint Compiler output
+export const CDConstraintsSchema = z.object({
+  must_have: z.object({
+    negative_space: z.object({
+      required: z.boolean(),
+      type: z.enum(["window", "seam", "notch", "keyhole"]).nullable(),
+      notes: z.array(z.string()),
+    }),
+    tension_gap: z.object({
+      required: z.boolean(),
+      placement: z.enum(["top", "right", "bottom", "left", "diagonal"]).nullable(),
+      notes: z.array(z.string()),
+    }),
+    interlock_logic: z.object({
+      required: z.boolean(),
+      notes: z.array(z.string()),
+    }),
+    fold_logic: z.object({
+      required: z.boolean(),
+      seam_angle_deg: z.number().nullable(),
+      notes: z.array(z.string()),
+    }),
+    orbit_logic: z.object({
+      required: z.boolean(),
+      gap_required: z.boolean(),
+      notes: z.array(z.string()),
+    }),
+  }),
+  must_avoid: z.object({
+    recycle_cliches: z.boolean(),
+    full_rings: z.boolean(),
+    concentric_rings: z.boolean(),
+    single_badge_circle: z.boolean(),
+    literal_swap_icons: z.boolean(),
+    text_in_mark: z.boolean(),
+  }),
+  silhouette_rules: z.object({
+    simplicity: z.enum(["simple", "medium"]),
+    min_paths: z.number(),
+    max_paths: z.number(),
+    small_size_legibility_px: z.number(),
+  }),
+  wordmark_rules: z.object({
+    case: WordmarkCaseSchema,
+    tracking: TrackingSchema,
+    contrast: ContrastSchema,
+    terminal: TerminalSchema,
+  }),
+  motif_family_priority: z.array(z.string()),
+  distinctiveness_hook_checks: z.array(z.string()),
+});
+
+export type CDConstraints = z.infer<typeof CDConstraintsSchema>;
+
+// Comparative Concept Critic output
+export const ComparativeCritiqueSchema = z.object({
+  ranked_concepts: z.array(
+    z.object({
+      concept_id: z.number(),
+      score: z.number(),
+      why: z.array(z.string()),
+      risk_flags: z.array(z.string()),
+    }),
+  ),
+  selected_concept_id: z.number(),
+  execution_directives: z.object({
+    motif_family: z.string(),
+    variant_targets: z.array(z.number()),
+    geometry_adjustments: z.array(z.string()),
+    composition: z.enum(["mark_only", "mark_word_lockup", "emblem", "wordmark_only"]),
+  }),
+});
+
+export type ComparativeCritique = z.infer<typeof ComparativeCritiqueSchema>;
+
+// Upgraded Logo Critic output with strategic alignment audit
+export const LogoCriticOutputUpgradedSchema = LogoCriticOutputSchema.extend({
+  scores: LogoCriticScoresSchema.extend({
+    ownability: z.number().min(0).max(100),
+    generic_risk: z.number().min(0).max(100),
+    strategic_alignment: z.number().min(0).max(100),
+  }),
+  violations: z.array(z.string()),
+  hook_verification: z.array(
+    z.object({
+      check: z.string(),
+      passed: z.boolean(),
+      notes: z.string(),
+    }),
+  ),
+});
+
+export type LogoCriticOutputUpgraded = z.infer<typeof LogoCriticOutputUpgradedSchema>;
+

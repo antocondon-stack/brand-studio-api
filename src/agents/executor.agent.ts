@@ -13,6 +13,7 @@ import {
 } from "../tools/motifMark.tool";
 import { buildTemplatePreviews } from "../tools/templatePreview.tool";
 import { buildLockupsFromSvgs } from "../tools/lockupsFromSvgs.tool";
+import type { CDConstraints, ComparativeCritique } from "../schemas";
 
 // Schema for the executor output (palette, fonts, templates)
 const ExecutorOutputSchema = z.object({
@@ -117,6 +118,8 @@ export async function runExecutorAgent(
   criticActions?: string[],
   selectedConcept?: LogoConcept | null,
   runSeed?: string,
+  cdConstraints?: CDConstraints,
+  executionDirectives?: ComparativeCritique["execution_directives"],
 ): Promise<FinalKit> {
   const { intake, chosen_direction } = request;
 
@@ -205,10 +208,23 @@ export async function runExecutorAgent(
     "monogram-interlock",
   ];
 
-  let motifFamily: "loop" | "interlock" | "orbit" | "fold" | "swap" | "monogram-interlock";
-  if (selectedConcept && supportedMotifFamilies.includes(selectedConcept.motif_family as typeof motifFamily)) {
+  let motifFamily: "loop" | "interlock" | "orbit" | "fold" | "swap" | "monogram-interlock" = "loop"; // Default fallback
+  
+  // Priority: execution_directives > selectedConcept > cdConstraints > chosen_direction
+  if (executionDirectives?.motif_family && supportedMotifFamilies.includes(executionDirectives.motif_family as typeof motifFamily)) {
+    motifFamily = executionDirectives.motif_family as typeof motifFamily;
+    console.log(`✅ Using execution directive motif: ${motifFamily}`);
+  } else if (selectedConcept && supportedMotifFamilies.includes(selectedConcept.motif_family as typeof motifFamily)) {
     motifFamily = selectedConcept.motif_family as typeof motifFamily;
     console.log(`✅ Using selected concept motif: ${motifFamily}`);
+  } else if (cdConstraints?.motif_family_priority?.length) {
+    const priorityFamily = cdConstraints.motif_family_priority.find((f) =>
+      supportedMotifFamilies.includes(f as typeof motifFamily),
+    );
+    if (priorityFamily) {
+      motifFamily = priorityFamily as typeof motifFamily;
+      console.log(`✅ Using CD constraint motif priority: ${motifFamily}`);
+    }
   } else if (chosen_direction.motif_system?.motifs?.length) {
     const fromDirection = chosen_direction.motif_system.motifs.find((m) =>
       supportedMotifFamilies.includes(m as typeof motifFamily),
@@ -269,14 +285,31 @@ export async function runExecutorAgent(
     console.log(`✅ Selected motif: ${motifFamily}`);
   }
 
-  // Helper function to score motif candidates deterministically
+  // Helper function to score motif candidates deterministically (respects constraints)
   function scoreMotifCandidate(svg: string, family: typeof motifFamily, strokePx: number): number {
     let score = 10;
     
-    // Penalize if SVG contains "<circle"
+    // Penalize if SVG contains "<circle" (especially if banned)
     const circleCount = (svg.match(/<circle/g) || []).length;
     if (circleCount > 0) {
-      score -= 10; // Heavy penalty for circles
+      score -= banCircles ? 20 : 10; // Heavy penalty if banned, otherwise moderate
+    }
+    
+    // Penalize full rings if banned
+    if (banFullRings) {
+      const fullRingPattern = /A\s+\d+\.?\d*\s+\d+\.?\d*\s+0\s+1\s+1/g;
+      const ringMatches = svg.match(fullRingPattern);
+      if (ringMatches && ringMatches.length >= 2) {
+        score -= 15; // Heavy penalty for full rings when banned
+      }
+    }
+    
+    // Penalize concentric rings if banned
+    if (banConcentricRings) {
+      const arcCount = (svg.match(/A\s+\d+\.?\d*\s+\d+\.?\d*/g) || []).length;
+      if (arcCount >= 4) {
+        score -= 10; // Penalty for concentric patterns
+      }
     }
     
     // Penalize if it contains 1 path only (unless monogram-interlock with 2 glyphs)
@@ -316,16 +349,31 @@ export async function runExecutorAgent(
   const primaryColor = primary;
   const motifCandidates = [];
   
-  // Derive variant from seed deterministically (0-5)
+  // Derive variant from seed deterministically (0-5), or use execution_directives.variant_targets
   const variantSeed = seed.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
   const baseVariant = variantSeed % 6;
+  const variantTargets = executionDirectives?.variant_targets?.length
+    ? executionDirectives.variant_targets
+    : [baseVariant, (baseVariant + 1) % 6, (baseVariant + 2) % 6];
   
-  console.log(`🎯 Motif settings: family=${motifFamily}, variant=${baseVariant}, use_fill=true, stroke_px=5`);
+  // Apply geometry adjustments from execution_directives
+  const geometryAdjustments = executionDirectives?.geometry_adjustments ?? [];
+  const banCircles = cdConstraints?.must_avoid.single_badge_circle ?? false;
+  const banFullRings = cdConstraints?.must_avoid.full_rings ?? false;
+  const banConcentricRings = cdConstraints?.must_avoid.concentric_rings ?? false;
+  
+  console.log(`🎯 Motif settings: family=${motifFamily}, variants=[${variantTargets.join(",")}], use_fill=true, stroke_px=5`);
+  if (geometryAdjustments.length > 0) {
+    console.log(`   Geometry adjustments: ${geometryAdjustments.join(", ")}`);
+  }
+  if (banCircles || banFullRings || banConcentricRings) {
+    console.log(`   Constraints: banCircles=${banCircles}, banFullRings=${banFullRings}, banConcentricRings=${banConcentricRings}`);
+  }
   
   // Get adjacent families (families that are visually/compositionally related)
-  const allFamilies: Array<typeof motifFamily> = ["loop", "interlock", "orbit", "fold", "swap", "monogram-interlock"];
+  const allFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap" | "monogram-interlock"> = ["loop", "interlock", "orbit", "fold", "swap", "monogram-interlock"];
   const currentFamilyIndex = allFamilies.indexOf(motifFamily);
-  const adjacentFamilies: Array<typeof motifFamily> = [];
+  const adjacentFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap" | "monogram-interlock"> = [];
   for (let i = 0; i < 6; i++) {
     const idx = (currentFamilyIndex + i + 1) % allFamilies.length;
     const family = allFamilies[idx];
@@ -334,12 +382,13 @@ export async function runExecutorAgent(
     }
   }
   
-  // 3 candidates from chosen motif family (variants 0-2)
-  for (let i = 0; i < 3; i++) {
+  // 3 candidates from chosen motif family (use variant_targets if provided)
+  const numCandidates = Math.min(3, variantTargets.length);
+  for (let i = 0; i < numCandidates; i++) {
     const candidateSeed = `${seed}-chosen-${i}`;
     const strokePx = 5; // Set to 5px for bolder marks
     const cornerRadiusPx = 3; // Set to 3px
-    const variant = (baseVariant + i) % 6; // 0-5
+    const variant = variantTargets[i] ?? (baseVariant + i) % 6; // Use variant_targets if available
     
     const candidate = generateMotifMark({
       brand_name: intake.brand_name,
@@ -367,9 +416,10 @@ export async function runExecutorAgent(
     });
   }
   
-  // 6 candidates from adjacent families
+  // 6 candidates from adjacent families (exclude monogram-interlock for scoring)
+  const adjacentFamiliesForScoring = adjacentFamilies.filter((f): f is "loop" | "interlock" | "orbit" | "fold" | "swap" => f !== "monogram-interlock");
   for (let i = 0; i < 6; i++) {
-    const family = adjacentFamilies[i % adjacentFamilies.length];
+    const family = adjacentFamiliesForScoring[i % adjacentFamiliesForScoring.length];
     if (!family) continue;
     
     const candidateSeed = `${seed}-adjacent-${i}`;
