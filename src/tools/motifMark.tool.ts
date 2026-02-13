@@ -348,7 +348,12 @@ function buildMonogramInterlock(
           y: 0,
         })
       : path1;
-  } catch {
+  } catch (error) {
+    // Font files are missing - use geometric fallback with warning
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.warn(`⚠️  Font loading failed for monogram-interlock: ${errorMsg}`);
+    console.warn(`⚠️  Using geometric fallback. Please add font files to assets/fonts/`);
+    
     // Fallback: use ribbon-style rounded rect loops instead of circles
     const bandWidth = grid * 0.12;
     const outerSize = grid * 0.36;

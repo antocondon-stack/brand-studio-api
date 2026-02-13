@@ -435,14 +435,39 @@ export function buildWordmarkSvg(input: DeterministicSvgInput) {
     { tracking_px: 0, label: "normal" },
     { tracking_px: 2, label: "wide" },
   ];
-  const wordmarkVariants = trackingVariants.map(({ tracking_px }) =>
-    fontToPath({
-      text: input.brand_name,
-      font_name: fontName,
-      font_size: wordmarkFontSize,
-      tracking_px,
-    }),
-  );
+  
+  let wordmarkVariants: FontToPathOutput[];
+  try {
+    wordmarkVariants = trackingVariants.map(({ tracking_px }) =>
+      fontToPath({
+        text: input.brand_name,
+        font_name: fontName,
+        font_size: wordmarkFontSize,
+        tracking_px,
+      }),
+    );
+  } catch (error) {
+    // Font files are missing - provide graceful fallback with warning
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error(`⚠️  Font loading failed: ${errorMsg}`);
+    console.error(`⚠️  Using fallback wordmark. Please add font files to assets/fonts/ and redeploy.`);
+    console.error(`⚠️  Required fonts: Inter-Regular.ttf, Inter-Bold.ttf, DMSerifDisplay-Regular.ttf`);
+    
+    // Create a basic fallback path that represents the text (simple geometric shapes)
+    // This allows the API to continue working until fonts are added
+    const len = input.brand_name.length;
+    const fallbackWidth = len * wordmarkFontSize * 0.6;
+    const fallbackHeight = wordmarkFontSize * 1.2;
+    const fallbackPath = `M 0 ${fallbackHeight * 0.3} L ${fallbackWidth} ${fallbackHeight * 0.3} L ${fallbackWidth} ${fallbackHeight * 0.7} L 0 ${fallbackHeight * 0.7} Z`;
+    
+    wordmarkVariants = [{
+      path_d: fallbackPath,
+      viewBox: `0 0 ${fallbackWidth} ${fallbackHeight}`,
+      width: fallbackWidth,
+      height: fallbackHeight,
+    }];
+  }
+  
   const bestWordmark =
     wordmarkVariants.length > 0
       ? wordmarkVariants.reduce((a, b) =>
