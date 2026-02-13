@@ -5,10 +5,12 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "build": "tsc",
+    "build": "tsc && npm run copy-assets",
+    "copy-assets": "node -e \"const fs=require('fs');const path=require('path');const src='assets';const dst='dist/assets';if(fs.existsSync(src)){const copy=(s,d)=>{if(!fs.existsSync(d))fs.mkdirSync(d,{recursive:true});fs.readdirSync(s).forEach(f=>{const sp=path.join(s,f);const dp=path.join(d,f);if(fs.statSync(sp).isDirectory())copy(sp,dp);else fs.copyFileSync(sp,dp);});};copy(src,dst);}\"",
     "start": "node dist/server.js",
     "postinstall": "npm run build",
-    "test:generate": "ts-node-dev --transpile-only test-generate.ts"
+    "test:generate": "ts-node-dev --transpile-only test-generate.ts",
+    "test:font-to-path": "ts-node-dev --transpile-only scripts/test-font-to-path.ts"
   },
   "keywords": [],
   "author": "",
