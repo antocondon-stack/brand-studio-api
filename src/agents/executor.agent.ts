@@ -256,6 +256,18 @@ export async function runExecutorAgent(
     palette: executorOutput.palette,
     fonts: executorOutput.fonts,
     templates,
+    logo_lockups: {
+      horizontal_svg: logos.logo_svg_horizontal,
+      stacked_svg: logos.logo_svg_stacked,
+      mark_only_svg: motifResult.mark_svg,
+    },
+    construction: {
+      grid: 24,
+      stroke_px: 2,
+      corner_radius_px: 2,
+      clearspace_ratio: 1.0,
+      min_size_px: 16,
+    },
   };
 
   if (selectedConcept) {

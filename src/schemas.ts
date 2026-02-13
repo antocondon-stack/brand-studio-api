@@ -174,6 +174,28 @@ export const FinalKitSchema = z.object({
       preview_svg: z.string().min(1),
     }),
   }),
+  logo_lockups: z
+    .object({
+      horizontal_svg: z.string().min(1),
+      stacked_svg: z.string().min(1),
+      mark_only_svg: z.string().min(1),
+    })
+    .optional(),
+  brand_assets: z
+    .object({
+      favicon_svg: z.string().min(1),
+      app_icon_svg: z.string().min(1),
+    })
+    .optional(),
+  construction: z
+    .object({
+      grid: z.number(),
+      stroke_px: z.number(),
+      corner_radius_px: z.number(),
+      clearspace_ratio: z.number(),
+      min_size_px: z.number(),
+    })
+    .optional(),
 });
 
 export type FinalKit = z.infer<typeof FinalKitSchema>;
@@ -198,6 +220,17 @@ export const FinalizeRequestSchema = z.object({
 });
 
 export type FinalizeRequest = z.infer<typeof FinalizeRequestSchema>;
+
+/** POST /routes-pdf request */
+export const RoutesPdfRequestSchema = z.object({
+  intake: IntakeSchema,
+  market_summary: MarketSummarySchema,
+  brand_strategy: BrandStrategySchema,
+  creative_directions: CreativeDirectionsSchema,
+  recommended_direction_id: z.enum(["A", "B", "C"]),
+});
+
+export type RoutesPdfRequest = z.infer<typeof RoutesPdfRequestSchema>;
 
 /** POST /finalize response: final_kit + chosen_direction + regen_seed; optional guidelines PDF */
 export const FinalizeResponseSchema = z.object({

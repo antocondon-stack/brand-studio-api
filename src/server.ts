@@ -3,8 +3,10 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { generate } from "./pipeline/generate";
 import { finalize } from "./pipeline/finalize";
-import { getGuidelinesPdf } from "./pdf/store";
-import { IntakeSchema, FinalizeRequestSchema } from "./schemas";
+import { getGuidelinesPdf, getRoutesPdf, storeRoutesPdf } from "./pdf/store";
+import { buildRoutesDeckPdf } from "./pdf/routesDeck";
+import { getBaseUrl } from "./utils/baseUrl";
+import { IntakeSchema, FinalizeRequestSchema, RoutesPdfRequestSchema } from "./schemas";
 
 // Load environment variables
 dotenv.config();
@@ -85,7 +87,7 @@ app.post("/finalize", async (req, res) => {
     const result = await finalize(request);
 
     if (result.guidelines_pdf_id) {
-      const baseUrl = `${req.protocol}://${req.get("host") ?? ""}`.replace(/\/$/, "");
+      const baseUrl = getBaseUrl(req);
       (result as Record<string, unknown>).guidelines_pdf_url = `${baseUrl}/guidelines/${result.guidelines_pdf_id}.pdf`;
       delete (result as Record<string, unknown>).guidelines_pdf_id;
     }
@@ -118,6 +120,34 @@ app.post("/finalize", async (req, res) => {
   }
 });
 
+// Routes PDF endpoint
+app.post("/routes-pdf", async (req, res) => {
+  try {
+    console.log("📥 Received routes-pdf request");
+    const request = RoutesPdfRequestSchema.parse(req.body);
+    console.log("✅ Routes PDF request validated");
+
+    const pdfBuffer = await buildRoutesDeckPdf(request);
+    const pdfId = storeRoutesPdf(pdfBuffer);
+    const baseUrl = getBaseUrl(req);
+    const routes_pdf_url = `${baseUrl}/routes/${pdfId}.pdf`;
+
+    console.log("✅ Routes PDF generated:", routes_pdf_url);
+    res.json({ routes_pdf_url });
+  } catch (error) {
+    console.error("❌ Routes PDF error:", error);
+    if (error instanceof Error) {
+      if (error.name === "ZodError") {
+        res.status(400).json({ error: "Invalid request", details: error.message });
+        return;
+      }
+      res.status(500).json({ error: "Internal server error", message: error.message });
+    } else {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+});
+
 // Guidelines PDF download (in-memory store; id from finalize response guidelines_pdf_id)
 app.get("/guidelines/:id", (req, res) => {
   const id = (req.params.id ?? "").replace(/\.pdf$/i, "");
@@ -132,6 +162,23 @@ app.get("/guidelines/:id", (req, res) => {
   }
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `inline; filename="brand-guidelines-${id}.pdf"`);
+  res.send(buffer);
+});
+
+// Routes PDF download
+app.get("/routes/:id", (req, res) => {
+  const id = (req.params.id ?? "").replace(/\.pdf$/i, "");
+  if (!id) {
+    res.status(400).json({ error: "Missing routes id" });
+    return;
+  }
+  const buffer = getRoutesPdf(id);
+  if (!buffer) {
+    res.status(404).json({ error: "Routes PDF not found or expired" });
+    return;
+  }
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="creative-routes-${id}.pdf"`);
   res.send(buffer);
 });
 
