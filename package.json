@@ -10,7 +10,8 @@
     "start": "node dist/server.js",
     "postinstall": "npm run build",
     "test:generate": "ts-node-dev --transpile-only test-generate.ts",
-    "test:font-to-path": "ts-node-dev --transpile-only scripts/test-font-to-path.ts"
+    "test:font-to-path": "ts-node-dev --transpile-only scripts/test-font-to-path.ts",
+    "setup-fonts": "bash scripts/setup-fonts.sh"
   },
   "keywords": [],
   "author": "",
