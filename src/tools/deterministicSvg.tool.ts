@@ -4,6 +4,7 @@ import { fontToPath, countPathCommands, type FontToPathOutput, type FontToPathOu
 import { textToPath } from "./fontToPath.tool";
 import { customizeWordmark } from "../wordmarkCustomizer/wordmarkCustomizer";
 import type { WordmarkCustomizationPlan } from "../wordmarkCustomizer/types";
+import { runWordmarkVariants } from "./wordmarkVariants.tool";
 
 const MotifFamilyEnum = z.enum([
   "interlock",
@@ -617,6 +618,83 @@ export function buildWordmarkSvg(input: DeterministicSvgInput) {
       primary_color: primary || "#000000",
     },
   };
+}
+
+const WIDTH = 640;
+const HEIGHT = 320;
+
+function getWordmarkFontFamily(input: DeterministicSvgInput): string {
+  return input.logo_archetype.includes("serif") || input.logo_archetype.includes("display")
+    ? "DM Serif Display"
+    : "Inter";
+}
+
+/**
+ * Build wordmark using wordmark engine + 12 variants, pick best by evaluator. Returns real glyph outlines.
+ * On failure (e.g. no font), returns null so caller can fall back to buildWordmarkSvg.
+ */
+export async function buildWordmarkFromVariants(
+  input: DeterministicSvgInput,
+): Promise<{
+  logo_svg_wordmark: string;
+  wordmark_metrics: { viewBox: string; width: number; height: number; centerX: number; centerY: number; path_d: string; primary_color: string };
+  wordmark_metadata: {
+    fontFamily: string;
+    fontWeight: number;
+    routeId?: string;
+    seed: string;
+    settingsApplied?: Record<string, unknown>;
+    scoreBreakdown?: { legibility: number; weight: number; distinctiveness: number; spacingConsistency: number };
+  };
+} | null> {
+  const key = JSON.stringify(input);
+  const seed = hashString(key);
+  const runSeed = input.regen_seed ?? String(seed);
+  const primary = input.palette_hex[seed % input.palette_hex.length] ?? "#000000";
+  const fontFamily = getWordmarkFontFamily(input);
+
+  try {
+    const { variants, bestIndex } = await runWordmarkVariants({
+      text: input.brand_name,
+      fontFamily,
+      fontStyle: "normal",
+      fontWeight: fontFamily === "DM Serif Display" ? 400 : 700,
+      fontSize: 32,
+      tracking: 0,
+      seed: runSeed,
+      routeId: input.direction_name,
+    });
+    const best = variants[bestIndex] ?? variants[0];
+    if (!best) return null;
+    const pathD = best.paths.map((p) => p.d).join(" ");
+    const [vx, vy, vw, vh] = [best.bbox.x, best.bbox.y, best.bbox.w, best.bbox.h];
+    const centerX = vx + vw / 2;
+    const centerY = vy + vh / 2;
+    const wordmarkSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${WIDTH}" height="${HEIGHT}" viewBox="0 0 ${WIDTH} ${HEIGHT}" role="img" aria-label="${input.brand_name} wordmark"><g transform="translate(${WIDTH / 2 - centerX}, ${HEIGHT / 2 - centerY})"><path d="${pathD.replace(/"/g, "'")}" fill="${primary}"/></g></svg>`;
+    if (wordmarkSvg.includes("<text")) return null;
+    return {
+      logo_svg_wordmark: wordmarkSvg,
+      wordmark_metrics: {
+        viewBox: `${vx} ${vy} ${vw} ${vh}`,
+        width: vw,
+        height: vh,
+        centerX,
+        centerY,
+        path_d: pathD,
+        primary_color: primary,
+      },
+      wordmark_metadata: {
+        fontFamily: best.settingsApplied.fontFamily,
+        fontWeight: best.settingsApplied.fontWeight,
+        routeId: input.direction_name,
+        seed: runSeed,
+        settingsApplied: best.settingsApplied as unknown as Record<string, unknown>,
+        scoreBreakdown: best.evaluation.breakdown,
+      },
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Legacy function for backward compatibility - now only generates wordmark */

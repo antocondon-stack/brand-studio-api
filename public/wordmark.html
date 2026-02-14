@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Wordmark Customizer</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #1a1a1a; color: #e0e0e0; }
+    .layout { display: flex; gap: 24px; max-width: 1600px; margin: 0 auto; }
+    .panel { flex: 1; min-width: 0; }
+    .controls { background: #2a2a2a; padding: 20px; border-radius: 12px; }
+    .controls label { display: block; margin-top: 12px; margin-bottom: 4px; font-size: 12px; text-transform: uppercase; opacity: .9; }
+    .controls input, .controls select { width: 100%; padding: 8px 12px; border: 1px solid #444; border-radius: 6px; background: #1a1a1a; color: #fff; }
+    .controls button { margin-top: 16px; padding: 10px 20px; background: #3b82f6; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; }
+    .controls button:hover { background: #2563eb; }
+    .controls button:disabled { opacity: .6; cursor: not-allowed; }
+    .previews { display: flex; flex-direction: column; gap: 16px; }
+    .preview-frame { background: #2a2a2a; border-radius: 12px; overflow: hidden; border: 1px solid #333; }
+    .preview-frame h3 { margin: 0; padding: 10px 14px; font-size: 13px; background: #333; }
+    .preview-frame .stage { display: flex; align-items: center; justify-content: center; background: #111; }
+    .preview-frame .stage svg { max-width: 100%; max-height: 100%; object-fit: contain; }
+    .mobile .stage { width: 320px; height: 80px; }
+    .desktop .stage { width: 100%; max-width: 1400px; height: 400px; }
+    .social .stage { width: 400px; height: 400px; }
+    .variants-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-top: 20px; }
+    .variant-card { background: #2a2a2a; border: 2px solid transparent; border-radius: 8px; padding: 8px; cursor: pointer; text-align: center; }
+    .variant-card:hover { border-color: #555; }
+    .variant-card.selected { border-color: #3b82f6; }
+    .variant-card .thumb { height: 48px; display: flex; align-items: center; justify-content: center; }
+    .variant-card .thumb svg { max-width: 100%; max-height: 100%; }
+    .variant-card .score { font-size: 11px; opacity: .8; margin-top: 4px; }
+    .empty-state { padding: 24px; text-align: center; opacity: .7; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="panel controls">
+      <h2>Wordmark Customizer</h2>
+      <label>Text</label>
+      <input id="text" type="text" value="Swapqed" placeholder="Brand name" />
+      <label>Route ID</label>
+      <input id="routeId" type="text" value="Modern" placeholder="e.g. Modern" />
+      <label>Font family</label>
+      <select id="fontFamily">
+        <option value="Inter">Inter</option>
+        <option value="DM Serif Display">DM Serif Display</option>
+      </select>
+      <label>Font weight</label>
+      <select id="fontWeight">
+        <option value="400">400</option>
+        <option value="700" selected>700</option>
+      </select>
+      <label>Tracking</label>
+      <input id="tracking" type="number" value="0" min="-200" max="200" />
+      <label>Seed</label>
+      <input id="seed" type="text" value="wordmark-v1" placeholder="Deterministic seed" />
+      <button id="btnGenerate">Generate 12 variants</button>
+    </aside>
+    <main class="panel">
+      <h3>Device previews</h3>
+      <div class="previews">
+        <div class="preview-frame mobile">
+          <h3>Mobile header (320×80)</h3>
+          <div class="stage" id="mobileStage"><div class="empty-state">Generate variants to preview</div></div>
+        </div>
+        <div class="preview-frame desktop">
+          <h3>Desktop hero (1400×400)</h3>
+          <div class="stage" id="desktopStage"><div class="empty-state">Generate variants to preview</div></div>
+        </div>
+        <div class="preview-frame social">
+          <h3>Social tile (1200×1200)</h3>
+          <div class="stage" id="socialStage"><div class="empty-state">Generate variants to preview</div></div>
+        </div>
+      </div>
+      <h3 style="margin-top: 24px;">Variants (click to select)</h3>
+      <div class="variants-grid" id="variantsGrid"></div>
+    </main>
+  </div>
+  <script>
+    const textEl = document.getElementById("text");
+    const routeIdEl = document.getElementById("routeId");
+    const fontFamilyEl = document.getElementById("fontFamily");
+    const fontWeightEl = document.getElementById("fontWeight");
+    const trackingEl = document.getElementById("tracking");
+    const seedEl = document.getElementById("seed");
+    const btnGenerate = document.getElementById("btnGenerate");
+    const mobileStage = document.getElementById("mobileStage");
+    const desktopStage = document.getElementById("desktopStage");
+    const socialStage = document.getElementById("socialStage");
+    const variantsGrid = document.getElementById("variantsGrid");
+
+    let selectedSvg = null;
+    const sizes = { mobile: [320, 80], desktop: [1400, 400], social: [1200, 1200] };
+
+    function renderPreview(container, svg, w, h) {
+      if (!svg) {
+        container.innerHTML = '<div class="empty-state">Generate variants to preview</div>';
+        return;
+      }
+      const wrap = document.createElement("div");
+      wrap.style.width = "100%";
+      wrap.style.height = "100%";
+      wrap.style.display = "flex";
+      wrap.style.alignItems = "center";
+      wrap.style.justifyContent = "center";
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(svg, "image/svg+xml");
+      const svgEl = doc.documentElement;
+      svgEl.setAttribute("width", String(w));
+      svgEl.setAttribute("height", String(h));
+      wrap.appendChild(svgEl);
+      container.innerHTML = "";
+      container.appendChild(wrap);
+    }
+
+    function updatePreviews() {
+      renderPreview(mobileStage, selectedSvg, sizes.mobile[0], sizes.mobile[1]);
+      renderPreview(desktopStage, selectedSvg, sizes.desktop[0], sizes.desktop[1]);
+      renderPreview(socialStage, selectedSvg, sizes.social[0], sizes.social[1]);
+    }
+
+    btnGenerate.addEventListener("click", async () => {
+      btnGenerate.disabled = true;
+      variantsGrid.innerHTML = "";
+      try {
+        const res = await fetch("/api/wordmark/variants", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: textEl.value.trim() || "Swapqed",
+            fontFamily: fontFamilyEl.value,
+            fontWeight: Number(fontWeightEl.value),
+            fontSize: 64,
+            tracking: Number(trackingEl.value) || 0,
+            seed: seedEl.value.trim() || "wordmark-v1",
+            routeId: routeIdEl.value.trim() || undefined,
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        const variants = data.variants || [];
+        if (variants.length > 0 && !selectedSvg) selectedSvg = variants[0].svg;
+        variants.forEach((v, i) => {
+          const card = document.createElement("div");
+          card.className = "variant-card" + (i === 0 ? " selected" : "");
+          card.innerHTML = '<div class="thumb"></div><div class="score">Score: ' + (v.evaluation?.totalScore ?? "-") + "</div>";
+          const thumb = card.querySelector(".thumb");
+          thumb.innerHTML = v.svg;
+          card.addEventListener("click", () => {
+            document.querySelectorAll(".variant-card").forEach((c) => c.classList.remove("selected"));
+            card.classList.add("selected");
+            selectedSvg = v.svg;
+            updatePreviews();
+          });
+          variantsGrid.appendChild(card);
+        });
+        if (variants.length > 0) {
+          selectedSvg = variants[0].svg;
+          updatePreviews();
+        }
+      } catch (e) {
+        console.error(e);
+        variantsGrid.innerHTML = '<div class="empty-state">Error: ' + (e.message || "Failed to load variants") + "</div>";
+      }
+      btnGenerate.disabled = false;
+    });
+  </script>
+</body>
+</html>

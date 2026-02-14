@@ -6,7 +6,7 @@ import {
   type FinalizeRequest,
   type LogoConcept,
 } from "../schemas";
-import { buildWordmarkSvg } from "../tools/deterministicSvg.tool";
+import { buildWordmarkSvg, buildWordmarkFromVariants } from "../tools/deterministicSvg.tool";
 import {
   generateMotifMark,
   scoreMotifDistinctiveness,
@@ -178,9 +178,9 @@ export async function runExecutorAgent(
   console.log(`🎨 Palette hexes: [${paletteHexToUse.join(", ")}]`);
   console.log(`🎨 Primary: ${primary}, Secondary: ${secondary}, Accent: ${accent}`);
 
-  // Step 3: Generate wordmark SVG and metrics using actual palette
+  // Step 3: Generate wordmark SVG (engine + 12 variants, or fallback to customizer path)
   console.log("📝 Generating wordmark...");
-  const wordmarkResult = buildWordmarkSvg({
+  const wordmarkInput = {
     brand_name: intake.brand_name,
     direction_name: chosen_direction.name,
     logo_archetype: chosen_direction.logo_archetype,
@@ -189,7 +189,14 @@ export async function runExecutorAgent(
     vibe: chosen_direction.visual_thesis,
     tracking: 0,
     regen_seed: runSeed,
-  });
+  };
+  let wordmarkResult: { logo_svg_wordmark: string; wordmark_metrics: { viewBox: string; width: number; height: number; centerX: number; centerY: number; path_d: string; primary_color: string }; wordmark_metadata?: FinalKit["wordmark_metadata"] };
+  const variantResult = await buildWordmarkFromVariants(wordmarkInput);
+  if (variantResult) {
+    wordmarkResult = variantResult;
+  } else {
+    wordmarkResult = buildWordmarkSvg(wordmarkInput);
+  }
 
   // Step 4: Generate motif mark candidates and select best
   console.log("🎯 Generating motif mark candidates...");
@@ -549,6 +556,9 @@ export async function runExecutorAgent(
       motif_family: selectedConcept.motif_family,
       composition: selectedConcept.composition,
     };
+  }
+  if (wordmarkResult.wordmark_metadata) {
+    finalKit.wordmark_metadata = wordmarkResult.wordmark_metadata;
   }
 
   return FinalKitSchema.parse(finalKit);

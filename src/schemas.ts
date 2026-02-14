@@ -196,6 +196,23 @@ export const FinalKitSchema = z.object({
       min_size_px: z.number(),
     })
     .optional(),
+  wordmark_metadata: z
+    .object({
+      fontFamily: z.string(),
+      fontWeight: z.number(),
+      routeId: z.string().optional(),
+      seed: z.string(),
+      settingsApplied: z.record(z.string(), z.unknown()).optional(),
+      scoreBreakdown: z
+        .object({
+          legibility: z.number(),
+          weight: z.number(),
+          distinctiveness: z.number(),
+          spacingConsistency: z.number(),
+        })
+        .optional(),
+    })
+    .optional(),
 });
 
 export type FinalKit = z.infer<typeof FinalKitSchema>;

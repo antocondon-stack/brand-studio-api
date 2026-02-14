@@ -1,5 +1,7 @@
 import express from "express";
 import cors from "cors";
+import path from "path";
+import fs from "fs";
 import dotenv from "dotenv";
 import { generate } from "./pipeline/generate";
 import { finalize } from "./pipeline/finalize";
@@ -7,6 +9,8 @@ import { getGuidelinesPdf, getRoutesPdf, storeRoutesPdf } from "./pdf/store";
 import { buildRoutesDeckPdf } from "./pdf/routesDeck";
 import { getBaseUrl } from "./utils/baseUrl";
 import { IntakeSchema, FinalizeRequestSchema, RoutesPdfRequestSchema } from "./schemas";
+import { runWordmarkEngine, WordmarkEngineInputSchema } from "./tools/wordmarkEngine.tool";
+import { runWordmarkVariants, WordmarkVariantsInputSchema } from "./tools/wordmarkVariants.tool";
 
 // Load environment variables
 dotenv.config();
@@ -180,6 +184,57 @@ app.get("/routes/:id", (req, res) => {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `inline; filename="creative-routes-${id}.pdf"`);
   res.send(buffer);
+});
+
+// Wordmark engine: single wordmark from settings
+app.post("/api/wordmark", async (req, res) => {
+  try {
+    const input = WordmarkEngineInputSchema.parse(req.body);
+    const result = await runWordmarkEngine(input);
+    res.json(result);
+  } catch (error) {
+    if (error instanceof Error && error.name === "ZodError") {
+      res.status(400).json({ error: "Invalid request", details: error.message });
+      return;
+    }
+    res.status(500).json({
+      error: "Internal server error",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
+// Wordmark variants: 12 variants, ranked by evaluator
+app.post("/api/wordmark/variants", async (req, res) => {
+  try {
+    const input = WordmarkVariantsInputSchema.parse(req.body);
+    const result = await runWordmarkVariants(input);
+    res.json(result);
+  } catch (error) {
+    if (error instanceof Error && error.name === "ZodError") {
+      res.status(400).json({ error: "Invalid request", details: error.message });
+      return;
+    }
+    res.status(500).json({
+      error: "Internal server error",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
+// Static assets (for /wordmark UI)
+const publicDir = path.join(process.cwd(), "public");
+if (fs.existsSync(publicDir)) {
+  app.use(express.static(publicDir));
+}
+// Wordmark customizer page (serve HTML)
+app.get("/wordmark", (req, res) => {
+  const htmlPath = path.join(process.cwd(), "public", "wordmark.html");
+  if (fs.existsSync(htmlPath)) {
+    res.sendFile(htmlPath);
+  } else {
+    res.status(404).json({ error: "Wordmark page not found. Ensure public/wordmark.html exists." });
+  }
 });
 
 // Start server with error handling

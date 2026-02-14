@@ -13,7 +13,8 @@
     "test:font-to-path": "ts-node-dev --transpile-only scripts/test-font-to-path.ts",
     "setup-fonts": "bash scripts/setup-fonts.sh",
     "test:font-glyphs": "ts-node-dev --transpile-only scripts/test-font-glyphs.ts",
-    "test:wordmark-customizer": "ts-node-dev --transpile-only scripts/test-wordmark-customizer.ts"
+    "test:wordmark-customizer": "ts-node-dev --transpile-only scripts/test-wordmark-customizer.ts",
+    "test:wordmark-engine": "ts-node-dev --transpile-only scripts/test-wordmark-engine.ts"
   },
   "keywords": [],
   "author": "",
