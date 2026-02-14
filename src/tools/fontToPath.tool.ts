@@ -130,6 +130,7 @@ const FontToPathInputSchema = z.object({
   font_name: z.enum(["inter", "inter_bold", "dm_serif", "space_grotesk"]),
   font_size: z.number().min(1).max(2000),
   tracking_px: z.number().min(-50).max(200).default(0),
+  return_glyphs: z.boolean().optional().default(false),
 });
 
 const FontToPathOutputSchema = z.object({
@@ -139,17 +140,29 @@ const FontToPathOutputSchema = z.object({
   height: z.number(),
 });
 
+const GlyphRunItemSchema = z.object({
+  index: z.number(),
+  char: z.string(),
+  path_d: z.string(),
+  bbox: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }),
+  advance: z.number(),
+});
+
 export type FontToPathInput = z.infer<typeof FontToPathInputSchema>;
 export type FontToPathOutput = z.infer<typeof FontToPathOutputSchema>;
+export type FontToPathOutputWithGlyphs = FontToPathOutput & {
+  glyphs: z.infer<typeof GlyphRunItemSchema>[];
+};
 
 /**
  * Convert text to a single SVG path and tight viewBox using opentype.js.
  * Throws error if font files are missing or if output quality is insufficient.
  * Never returns placeholder shapes - always produces real glyph outlines.
+ * When return_glyphs is true, returns per-glyph path_d, bbox, and advance.
  */
-export function fontToPath(input: FontToPathInput): FontToPathOutput {
-  const { text, font_name, font_size, tracking_px } = input;
-  
+export function fontToPath(input: FontToPathInput): FontToPathOutput | FontToPathOutputWithGlyphs {
+  const { text, font_name, font_size, tracking_px, return_glyphs } = input;
+
   // Fallback font order if primary fails
   const fallbackOrder: Array<keyof typeof FONT_FILES> = [
     font_name,
@@ -157,48 +170,100 @@ export function fontToPath(input: FontToPathInput): FontToPathOutput {
     "space_grotesk",
     "dm_serif",
   ];
-  
+
   let lastError: Error | null = null;
-  
+
   // Try primary font, then fallbacks
   for (const tryFontName of fallbackOrder) {
     try {
       const font = loadFont(tryFontName);
-      
-      // Build path with tracking
+      const fontScale = font_size / font.unitsPerEm;
       const letterSpacing = tracking_px !== 0 ? tracking_px / font_size : undefined;
       const options: { letterSpacing?: number } = {};
       if (letterSpacing !== undefined) options.letterSpacing = letterSpacing;
-      
+
       // Use baseline at y = fontSize so glyphs sit positive
       const baselineY = font_size;
+
+      if (return_glyphs) {
+        const glyphs: Array<{
+          index: number;
+          char: string;
+          path_d: string;
+          bbox: { x: number; y: number; w: number; h: number };
+          advance: number;
+        }> = [];
+        let x = 0;
+        let combinedPath: opentype.Path | null = null;
+
+        for (let i = 0; i < text.length; i++) {
+          const char = text[i]!;
+          const glyph = font.charToGlyph(char);
+          const glyphPath = glyph.getPath(x, baselineY, font_size, options, font);
+          const path_d = glyphPath.toPathData(3);
+          const gbbox = glyphPath.getBoundingBox();
+          const advance = glyph.advanceWidth ? glyph.advanceWidth * fontScale : (gbbox.x2 - gbbox.x1);
+          const advancePx = advance + (letterSpacing !== undefined ? letterSpacing * font_size : 0);
+
+          glyphs.push({
+            index: i,
+            char,
+            path_d,
+            bbox: {
+              x: gbbox.x1,
+              y: gbbox.y1,
+              w: gbbox.x2 - gbbox.x1,
+              h: gbbox.y2 - gbbox.y1,
+            },
+            advance: advancePx,
+          });
+
+          if (!combinedPath) combinedPath = new opentype.Path();
+          combinedPath.extend(glyphPath);
+          x += advancePx;
+        }
+
+        if (glyphs.length === 0) {
+          throw new Error("No glyphs produced");
+        }
+
+        const path_d = combinedPath!.toPathData(3);
+        const bbox = combinedPath!.getBoundingBox();
+        const x1 = bbox.x1;
+        const y1 = bbox.y1;
+        const width = bbox.x2 - x1;
+        const height = bbox.y2 - y1;
+
+        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+          throw new Error(`Invalid bounding box: width=${width}, height=${height}`);
+        }
+        validatePathQuality(path_d, width, height, font_size);
+
+        const viewBox = `${x1} ${y1} ${width} ${height}`;
+        return {
+          path_d,
+          viewBox,
+          width,
+          height,
+          glyphs,
+        };
+      }
+
+      // Original combined path only
       const path = font.getPath(text, 0, baselineY, font_size, options);
-      const path_d = path.toPathData(3); // Precision 3 for quality
-      
-      // Get bounding box
+      const path_d = path.toPathData(3);
       const bbox = path.getBoundingBox();
       const x1 = bbox.x1;
       const y1 = bbox.y1;
-      const x2 = bbox.x2;
-      const y2 = bbox.y2;
-      const width = x2 - x1;
-      const height = y2 - y1;
-      
-      // Validate bounds
-      if (
-        !Number.isFinite(width) ||
-        !Number.isFinite(height) ||
-        width <= 0 ||
-        height <= 0
-      ) {
+      const width = bbox.x2 - x1;
+      const height = bbox.y2 - y1;
+
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
         throw new Error(`Invalid bounding box: width=${width}, height=${height}`);
       }
-      
-      // Quality gate: ensure path has sufficient detail
       validatePathQuality(path_d, width, height, font_size);
-      
+
       const viewBox = `${x1} ${y1} ${width} ${height}`;
-      
       return {
         path_d,
         viewBox,
@@ -207,15 +272,13 @@ export function fontToPath(input: FontToPathInput): FontToPathOutput {
       };
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      // Continue to next fallback
       continue;
     }
   }
-  
-  // All fonts failed
+
   throw new Error(
     `FontToPath failed: all font attempts failed. Last error: ${lastError?.message}. ` +
-    `Ensure font files exist in assets/fonts/ directory.`
+      `Ensure font files exist in assets/fonts/ directory.`
   );
 }
 
@@ -296,6 +359,7 @@ export function textToPath(options: FontToPathOptions): string {
     font_name: fontName,
     font_size: fontSize,
     tracking_px,
+    return_glyphs: false,
   });
   return result.path_d;
 }

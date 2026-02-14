@@ -11,7 +11,9 @@
     "postinstall": "npm run build",
     "test:generate": "ts-node-dev --transpile-only test-generate.ts",
     "test:font-to-path": "ts-node-dev --transpile-only scripts/test-font-to-path.ts",
-    "setup-fonts": "bash scripts/setup-fonts.sh"
+    "setup-fonts": "bash scripts/setup-fonts.sh",
+    "test:font-glyphs": "ts-node-dev --transpile-only scripts/test-font-glyphs.ts",
+    "test:wordmark-customizer": "ts-node-dev --transpile-only scripts/test-wordmark-customizer.ts"
   },
   "keywords": [],
   "author": "",
@@ -19,6 +21,7 @@
   "type": "commonjs",
   "dependencies": {
     "@openai/agents": "^0.4.7",
+    "clipper-lib": "^6.4.2",
     "cors": "^2.8.6",
     "dotenv": "^17.2.4",
     "express": "^5.2.1",
@@ -35,5 +38,8 @@
     "@types/pdfkit": "^0.17.5",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

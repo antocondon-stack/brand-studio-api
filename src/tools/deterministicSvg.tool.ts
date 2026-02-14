@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { tool } from "@openai/agents";
-import { fontToPath, type FontToPathOutput } from "./fontToPath.tool";
+import { fontToPath, countPathCommands, type FontToPathOutput, type FontToPathOutputWithGlyphs } from "./fontToPath.tool";
 import { textToPath } from "./fontToPath.tool";
+import { customizeWordmark } from "../wordmarkCustomizer/wordmarkCustomizer";
+import type { WordmarkCustomizationPlan } from "../wordmarkCustomizer/types";
 
 const MotifFamilyEnum = z.enum([
   "interlock",
@@ -415,10 +417,79 @@ function scoreMotifMark(svg: string, family: string): number {
   return Math.max(0, score);
 }
 
+const PREFERRED_LETTERS = ["q", "z", "o", "a", "e", "s", "p", "r", "b", "m", "n", "k", "t", "l"];
+
+/** Derive MVP customization plan from input (deterministic). */
+function deriveWordmarkPlan(input: DeterministicSvgInput, seed: number): WordmarkCustomizationPlan {
+  const brandLower = input.brand_name.toLowerCase();
+  const target_letters: string[] = [];
+  for (const c of PREFERRED_LETTERS) {
+    if (brandLower.includes(c) && target_letters.length < 2) target_letters.push(c);
+  }
+  if (target_letters.length === 0 && brandLower.length > 0) {
+    target_letters.push(brandLower[0]!);
+  }
+
+  const kw = input.keywords.join(" ").toLowerCase();
+  const devices: WordmarkCustomizationPlan["devices"] = [];
+  const hasInterlock = /interlock|lock/i.test(kw);
+  const hasFold = /fold|precision/i.test(kw);
+
+  if (hasInterlock && target_letters.length >= 2) {
+    devices.push({
+      kind: "ligature_bridge",
+      target: "pair",
+      from: target_letters[0]!,
+      to: target_letters[1]!,
+      thickness: 0.12,
+      y_pos: "xheight",
+    });
+  }
+  if (hasFold && target_letters.length >= 1) {
+    devices.push({
+      kind: "seam_cut",
+      target: "single",
+      letter: target_letters[0]!,
+      angle_deg: 45,
+      thickness: 0.1,
+      offset: 2,
+    });
+  }
+  if (target_letters.length >= 1 && !devices.some((d) => d.kind === "notch_cut")) {
+    devices.push({
+      kind: "notch_cut",
+      target: "single",
+      letter: target_letters[0]!,
+      side: seed % 2 === 0 ? "bottom" : "top",
+      depth: 0.12,
+      width: 0.18,
+    });
+  }
+  if (devices.length < 2 && target_letters.length >= 2 && !hasInterlock) {
+    devices.push({
+      kind: "seam_cut",
+      target: "single",
+      letter: target_letters[1] ?? target_letters[0]!,
+      angle_deg: -30,
+      thickness: 0.1,
+      offset: 1,
+    });
+  }
+
+  return {
+    target_letters,
+    devices,
+    boldness: { compression: 1, weight_bias: 0 },
+    optical: { overshoot: 0 },
+    reject_if: [],
+  };
+}
+
 /** Build wordmark SVG and return metrics for lockup construction */
 export function buildWordmarkSvg(input: DeterministicSvgInput) {
   const key = JSON.stringify(input);
   const seed = hashString(key);
+  const runSeed = input.regen_seed ?? String(seed);
 
   const width = 640;
   const height = 320;
@@ -429,65 +500,100 @@ export function buildWordmarkSvg(input: DeterministicSvgInput) {
     input.palette_hex[seed % input.palette_hex.length],
   ];
 
-  // Three wordmark variants: tight, normal, wide tracking (path-only, no <text>)
-  const trackingVariants = [
-    { tracking_px: -1, label: "tight" },
-    { tracking_px: 0, label: "normal" },
-    { tracking_px: 2, label: "wide" },
-  ];
-  
-  let wordmarkVariants: FontToPathOutput[];
-  try {
-    wordmarkVariants = trackingVariants.map(({ tracking_px }) =>
-      fontToPath({
-        text: input.brand_name,
-        font_name: fontName,
-        font_size: wordmarkFontSize,
-        tracking_px,
-      }),
-    );
-  } catch (error) {
-    // Font files are missing - provide graceful fallback with warning
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    console.error(`⚠️  Font loading failed: ${errorMsg}`);
-    console.error(`⚠️  Using fallback wordmark. Please add font files to assets/fonts/ and redeploy.`);
-    console.error(`⚠️  Required fonts: Inter-Regular.ttf, Inter-Bold.ttf, DMSerifDisplay-Regular.ttf`);
-    
-    // Create a basic fallback path that represents the text (simple geometric shapes)
-    // This allows the API to continue working until fonts are added
-    const len = input.brand_name.length;
-    const fallbackWidth = len * wordmarkFontSize * 0.6;
-    const fallbackHeight = wordmarkFontSize * 1.2;
-    const fallbackPath = `M 0 ${fallbackHeight * 0.3} L ${fallbackWidth} ${fallbackHeight * 0.3} L ${fallbackWidth} ${fallbackHeight * 0.7} L 0 ${fallbackHeight * 0.7} Z`;
-    
-    wordmarkVariants = [{
-      path_d: fallbackPath,
-      viewBox: `0 0 ${fallbackWidth} ${fallbackHeight}`,
-      width: fallbackWidth,
-      height: fallbackHeight,
-    }];
-  }
-  
-  const bestWordmark =
-    wordmarkVariants.length > 0
-      ? wordmarkVariants.reduce((a, b) =>
-          scoreReadability(a, input.brand_name) >=
-          scoreReadability(b, input.brand_name)
-            ? a
-            : b,
-        )
-      : wordmarkVariants[0]!;
-  const wordmarkPath = safePathD(bestWordmark.path_d);
-  const wordmarkBounds = {
-    x1: parseFloat(bestWordmark.viewBox.split(/\s+/)[0] ?? "0"),
-    y1: parseFloat(bestWordmark.viewBox.split(/\s+/)[1] ?? "0"),
-    w: bestWordmark.width,
-    h: bestWordmark.height,
-  };
-  const wordmarkCenterX = wordmarkBounds.x1 + wordmarkBounds.w / 2;
-  const wordmarkCenterY = wordmarkBounds.y1 + wordmarkBounds.h / 2;
+  let wordmarkPath: string;
+  let viewBox: string;
+  let wordmarkWidth: number;
+  let wordmarkHeight: number;
 
-  // Wordmark SVG: path only, centered using optical center (bbox center)
+  try {
+    const withGlyphs = fontToPath({
+      text: input.brand_name,
+      font_name: fontName,
+      font_size: wordmarkFontSize,
+      tracking_px: 0,
+      return_glyphs: true,
+    }) as FontToPathOutputWithGlyphs;
+
+    if (withGlyphs.glyphs && withGlyphs.glyphs.length > 0) {
+      const plan = deriveWordmarkPlan(input, seed);
+      const result = customizeWordmark({
+        base: {
+          path_d: withGlyphs.path_d,
+          viewBox: withGlyphs.viewBox,
+          width: withGlyphs.width,
+          height: withGlyphs.height,
+          glyphs: withGlyphs.glyphs,
+        },
+        plan,
+        seed: runSeed,
+      });
+      wordmarkPath = safePathD(result.wordmark_path_d);
+      viewBox = withGlyphs.viewBox;
+      wordmarkWidth = withGlyphs.width;
+      wordmarkHeight = withGlyphs.height;
+
+      const cmdCount = (wordmarkPath.match(/[MLCQAZ]/gi) || []).length;
+      if (cmdCount < 30) {
+        console.warn("wordmark too simple; likely font missing or conversion failed");
+      }
+    } else {
+      throw new Error("No glyphs");
+    }
+  } catch (_) {
+    const trackingVariants = [
+      { tracking_px: -1 },
+      { tracking_px: 0 },
+      { tracking_px: 2 },
+    ];
+    let wordmarkVariants: FontToPathOutput[];
+    try {
+      wordmarkVariants = trackingVariants.map(({ tracking_px }) =>
+        fontToPath({
+          text: input.brand_name,
+          font_name: fontName,
+          font_size: wordmarkFontSize,
+          tracking_px,
+          return_glyphs: false,
+        }),
+      );
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error(`⚠️  Font loading failed: ${errorMsg}`);
+      console.error(`⚠️  Using fallback wordmark. Please add font files to assets/fonts/ and redeploy.`);
+      const len = input.brand_name.length;
+      const fallbackWidth = len * wordmarkFontSize * 0.6;
+      const fallbackHeight = wordmarkFontSize * 1.2;
+      const fallbackPath = `M 0 ${fallbackHeight * 0.3} L ${fallbackWidth} ${fallbackHeight * 0.3} L ${fallbackWidth} ${fallbackHeight * 0.7} L 0 ${fallbackHeight * 0.7} Z`;
+      wordmarkVariants = [{
+        path_d: fallbackPath,
+        viewBox: `0 0 ${fallbackWidth} ${fallbackHeight}`,
+        width: fallbackWidth,
+        height: fallbackHeight,
+      }];
+    }
+    const bestWordmark = wordmarkVariants.length > 0
+      ? wordmarkVariants.reduce((a, b) =>
+          scoreReadability(a, input.brand_name) >= scoreReadability(b, input.brand_name) ? a : b)
+      : wordmarkVariants[0]!;
+    wordmarkPath = safePathD(bestWordmark.path_d);
+    viewBox = bestWordmark.viewBox;
+    wordmarkWidth = bestWordmark.width;
+    wordmarkHeight = bestWordmark.height;
+  }
+
+  const cmdCount = countPathCommands(wordmarkPath);
+  if (cmdCount < 30) {
+    console.warn("wordmark too simple; likely font missing or conversion failed");
+  }
+
+  const vParts = viewBox.split(/\s+/).map(parseFloat);
+  const vx = vParts[0] ?? 0;
+  const vy = vParts[1] ?? 0;
+  const vw = vParts[2] ?? 0;
+  const vh = vParts[3] ?? 0;
+  const wordmarkCenterX = vx + vw / 2;
+  const wordmarkCenterY = vy + vh / 2;
+
   const wordmarkSvg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${input.brand_name} wordmark">
   <g transform="translate(${width / 2 - wordmarkCenterX}, ${height / 2 - wordmarkCenterY})">
@@ -495,12 +601,16 @@ export function buildWordmarkSvg(input: DeterministicSvgInput) {
   </g>
 </svg>`.trim();
 
+  if (wordmarkSvg.includes("<text")) {
+    throw new Error("Wordmark SVG must not contain <text>");
+  }
+
   return {
     logo_svg_wordmark: wordmarkSvg,
     wordmark_metrics: {
-      viewBox: bestWordmark.viewBox,
-      width: bestWordmark.width,
-      height: bestWordmark.height,
+      viewBox,
+      width: wordmarkWidth,
+      height: wordmarkHeight,
       centerX: wordmarkCenterX,
       centerY: wordmarkCenterY,
       path_d: wordmarkPath,
