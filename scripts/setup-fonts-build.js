@@ -32,6 +32,16 @@ console.log("📦 Cloning Google Fonts repository...");
 console.log(`   Target: ${fontsMainPath}`);
 console.log(`   CWD: ${process.cwd()}`);
 
+// Check if git is available
+try {
+  const gitVersion = execSync("git --version", { encoding: "utf8", stdio: "pipe" }).trim();
+  console.log(`   Git available: ${gitVersion}`);
+} catch (e) {
+  console.error("❌ Git is not available! Cannot clone fonts repository.");
+  console.error("   Please ensure git is installed in the build environment.");
+  process.exit(1);
+}
+
 try {
   // Create parent directory if needed
   const fontsDir = path.join(rootDir, "assets", "fonts");
