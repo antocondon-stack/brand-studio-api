@@ -21,15 +21,23 @@ const PORT = Number(process.env.PORT) || 8787;
 // Log port configuration for debugging
 console.log(`Port configuration: ${process.env.PORT ? `Using Railway PORT: ${process.env.PORT}` : `Using fallback PORT: ${PORT}`}`);
 
-// Initialize Google Fonts index on startup
+// Initialize Google Fonts index on startup (preload)
 try {
-  const { ensureGoogleFontsIndex } = require("./tools/fontToPath.tool");
+  const fontToPathModule = require("./tools/fontToPath.tool");
+  const { ensureGoogleFontsIndex, getSelectedGoogleFontsRoot } = fontToPathModule;
   const index = ensureGoogleFontsIndex();
-  if (index.length === 0) {
+  const selectedRoot = getSelectedGoogleFontsRoot();
+  if (selectedRoot) {
+    const ttfCount = index.filter((e: { file: string }) => e.file.toLowerCase().endsWith(".ttf")).length;
+    console.log(`📦 Fonts: Google Fonts root=${selectedRoot}, indexed=${index.length} files (${ttfCount} .ttf)`);
+  } else {
     const dirs = process.env.GOOGLE_FONTS_DIR
       ? [process.env.GOOGLE_FONTS_DIR]
-      : [path.join(process.cwd(), "assets", "google-fonts"), path.join(process.cwd(), "dist", "assets", "google-fonts")];
-    console.log(`⚠️  Google Fonts directory not found. Tried: ${dirs.join(", ")}. Set GOOGLE_FONTS_DIR env var if using Google Fonts.`);
+      : [
+          path.join(process.cwd(), "dist", "assets", "google-fonts"),
+          path.join(process.cwd(), "assets", "google-fonts"),
+        ];
+    console.warn(`⚠️  Google Fonts directory not found. Tried: ${dirs.join(", ")}. Set GOOGLE_FONTS_DIR env var if using Google Fonts.`);
   }
 } catch (error) {
   console.warn("Failed to initialize Google Fonts index:", error instanceof Error ? error.message : String(error));
@@ -255,18 +263,42 @@ app.get("/wordmark", (req, res) => {
 app.get("/debug/fonts", async (req, res) => {
   try {
     const fontToPathModule = require("./tools/fontToPath.tool");
-    const { ensureGoogleFontsIndex, getAvailableFonts, fontToPath } = fontToPathModule;
+    const { ensureGoogleFontsIndex, getAvailableFonts, fontToPath, getSelectedGoogleFontsRoot } = fontToPathModule;
+    
+    const distGoogleFontsPath = path.join(process.cwd(), "dist", "assets", "google-fonts");
+    const distFontsPath = path.join(process.cwd(), "dist", "assets", "fonts");
+    
+    const distGoogleFontsExists = fs.existsSync(distGoogleFontsPath);
+    let distFontsFilesCount = 0;
+    if (fs.existsSync(distFontsPath)) {
+      try {
+        function countFontFiles(dir: string): number {
+          let count = 0;
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              count += countFontFiles(fullPath);
+            } else if (entry.isFile() && (entry.name.toLowerCase().endsWith(".ttf") || entry.name.toLowerCase().endsWith(".otf"))) {
+              count++;
+            }
+          }
+          return count;
+        }
+        distFontsFilesCount = countFontFiles(distFontsPath);
+      } catch {}
+    }
     
     const googleFontsDirs = process.env.GOOGLE_FONTS_DIR
       ? [process.env.GOOGLE_FONTS_DIR]
       : [
-          path.join(process.cwd(), "dist", "assets", "google-fonts"),
+          distGoogleFontsPath,
           path.join(process.cwd(), "assets", "google-fonts"),
           process.platform !== "win32" ? "/app/assets/google-fonts" : null,
         ].filter(Boolean) as string[];
     
     const assetsFontsDirs = [
-      path.join(process.cwd(), "dist", "assets", "fonts"),
+      distFontsPath,
       path.join(process.cwd(), "assets", "fonts"),
     ];
     
@@ -293,6 +325,8 @@ app.get("/debug/fonts", async (req, res) => {
       return { path: dir, exists, files };
     });
     
+    const selectedGoogleFontsRoot = getSelectedGoogleFontsRoot();
+    
     let sampleRender: { font: string; ok: boolean; commandCount?: number; error?: string } = {
       font: "Space Grotesk 700",
       ok: false,
@@ -317,6 +351,9 @@ app.get("/debug/fonts", async (req, res) => {
       __dirname: __dirname,
       nodeVersion: process.version,
       isDistRun: __dirname.includes("dist"),
+      distGoogleFontsExists,
+      distFontsFilesCount,
+      selectedGoogleFontsRoot,
       googleFontsDirCandidates: googleFontsCandidates,
       assetsFontsCandidates: assetsFontsCandidates,
       availableFonts: getAvailableFonts(),

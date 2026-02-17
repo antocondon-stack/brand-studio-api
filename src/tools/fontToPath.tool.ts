@@ -12,13 +12,14 @@ const FONT_FILES: Record<"inter" | "inter_bold" | "dm_serif" | "space_grotesk", 
   space_grotesk: "SpaceGrotesk-Regular.ttf",
 };
 
-// Railway-safe font directories (try multiple locations)
+// Railway-safe font directories (try multiple locations, dist first for production)
 const FONT_DIRS = [
+  path.join(process.cwd(), "dist", "assets", "fonts"), // For Railway build output (dist first)
   path.join(process.cwd(), "assets", "fonts"),
-  path.join(process.cwd(), "dist", "assets", "fonts"), // For Railway build output
   path.join(__dirname, "..", "..", "assets", "fonts"),
   path.join(__dirname, "..", "assets", "fonts"),
-];
+  process.platform !== "win32" ? "/tmp/fonts" : null,
+].filter((d): d is string => d !== null);
 
 // In-memory font cache
 const fontCache = new Map<string, opentype.Font>();
@@ -113,6 +114,11 @@ function buildGoogleFontsIndex(rootDir: string): FontIndexEntry[] {
 }
 
 let googleFontsStartupLogged = false;
+let selectedGoogleFontsRoot: string | null = null;
+
+export function getSelectedGoogleFontsRoot(): string | null {
+  return selectedGoogleFontsRoot;
+}
 
 export function ensureGoogleFontsIndex(): FontIndexEntry[] {
   if (googleFontIndex !== null) return googleFontIndex;
@@ -122,8 +128,10 @@ export function ensureGoogleFontsIndex(): FontIndexEntry[] {
     if (fs.existsSync(dir)) {
       googleFontIndex = buildGoogleFontsIndex(dir);
       if (googleFontIndex.length > 0) {
+        selectedGoogleFontsRoot = dir;
+        const ttfCount = googleFontIndex.filter((e) => e.file.toLowerCase().endsWith(".ttf")).length;
         if (!googleFontsStartupLogged) {
-          console.log(`✅ Google Fonts index built: ${googleFontIndex.length} files from ${dir}`);
+          console.log(`✅ Google Fonts index built: ${googleFontIndex.length} files (${ttfCount} .ttf) from ${dir}`);
           googleFontsStartupLogged = true;
         }
         return googleFontIndex;
@@ -132,6 +140,7 @@ export function ensureGoogleFontsIndex(): FontIndexEntry[] {
   }
 
   googleFontIndex = [];
+  selectedGoogleFontsRoot = null;
   if (!googleFontsStartupLogged) {
     console.warn(`⚠️  Google Fonts directory not found. Tried: ${dirs.join(", ")}`);
     googleFontsStartupLogged = true;
