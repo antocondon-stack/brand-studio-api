@@ -48,6 +48,25 @@ if (fs.existsSync(googleFontsSrc)) {
 if (fs.existsSync(fontsSrc)) {
   fontsCount = copyRecursive(fontsSrc, fontsDst);
   console.log(`✅ Copied ${fontsCount} font files to dist/assets/fonts`);
+  
+  // Verify fonts-main was copied
+  const fontsMainDst = path.join(fontsDst, "fonts-main");
+  if (fs.existsSync(fontsMainDst)) {
+    const oflDst = path.join(fontsMainDst, "ofl");
+    if (fs.existsSync(oflDst)) {
+      try {
+        const ttfCount = fs.readdirSync(oflDst, { recursive: true, withFileTypes: true })
+          .filter(e => e.isFile() && e.name.toLowerCase().endsWith(".ttf")).length;
+        console.log(`   Verified: ${ttfCount} TTF files in dist/assets/fonts/fonts-main/ofl`);
+      } catch (e) {
+        console.warn(`   Warning: Could not verify TTF files in dist`);
+      }
+    } else {
+      console.warn(`   Warning: dist/assets/fonts/fonts-main/ofl not found after copy`);
+    }
+  } else {
+    console.warn(`   Warning: dist/assets/fonts/fonts-main not found after copy`);
+  }
 } else {
   console.log(`⚠️  assets/fonts not found, skipping`);
 }
