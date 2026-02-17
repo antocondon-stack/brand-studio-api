@@ -21,6 +21,20 @@ const PORT = Number(process.env.PORT) || 8787;
 // Log port configuration for debugging
 console.log(`Port configuration: ${process.env.PORT ? `Using Railway PORT: ${process.env.PORT}` : `Using fallback PORT: ${PORT}`}`);
 
+// Initialize Google Fonts index on startup
+try {
+  const { ensureGoogleFontsIndex } = require("./tools/fontToPath.tool");
+  const index = ensureGoogleFontsIndex();
+  if (index.length === 0) {
+    const dirs = process.env.GOOGLE_FONTS_DIR
+      ? [process.env.GOOGLE_FONTS_DIR]
+      : [path.join(process.cwd(), "assets", "google-fonts"), path.join(process.cwd(), "dist", "assets", "google-fonts")];
+    console.log(`⚠️  Google Fonts directory not found. Tried: ${dirs.join(", ")}. Set GOOGLE_FONTS_DIR env var if using Google Fonts.`);
+  }
+} catch (error) {
+  console.warn("Failed to initialize Google Fonts index:", error instanceof Error ? error.message : String(error));
+}
+
 // Middleware
 app.use(cors());
 app.use(express.json());
