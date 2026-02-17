@@ -40,10 +40,12 @@ function getGoogleFontsDirs(): string[] {
   const dirs: string[] = [];
   // Check dist first (production build)
   dirs.push(path.join(process.cwd(), "dist", "assets", "google-fonts"));
+  dirs.push(path.join(process.cwd(), "dist", "assets", "fonts", "fonts-main")); // Google Fonts repo in dist
   if (process.env.GOOGLE_FONTS_DIR) {
     dirs.push(path.resolve(process.env.GOOGLE_FONTS_DIR));
   }
   dirs.push(path.join(process.cwd(), "assets", "google-fonts"));
+  dirs.push(path.join(process.cwd(), "assets", "fonts", "fonts-main")); // Google Fonts repository location
   if (process.platform !== "win32") {
     dirs.push("/app/assets/google-fonts"); // Railway safety
   }
