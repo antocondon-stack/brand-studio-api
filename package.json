@@ -18,7 +18,8 @@
     "test:font-glyphs": "ts-node-dev --transpile-only scripts/test-font-glyphs.ts",
     "test:wordmark-customizer": "ts-node-dev --transpile-only scripts/test-wordmark-customizer.ts",
     "test:wordmark-engine": "ts-node-dev --transpile-only scripts/test-wordmark-engine.ts",
-    "test:google-fonts": "ts-node-dev --transpile-only scripts/test-google-fonts.ts"
+    "test:google-fonts": "ts-node-dev --transpile-only scripts/test-google-fonts.ts",
+    "test:motif-mark": "ts-node-dev --transpile-only scripts/test-motif-mark.ts"
   },
   "keywords": [],
   "author": "",

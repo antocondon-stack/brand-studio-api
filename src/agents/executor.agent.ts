@@ -271,21 +271,38 @@ export async function runExecutorAgent(
     "monogram-interlock",
   ];
 
+  // Check if monogram-interlock is appropriate for this brand
+  const words = intake.brand_name.trim().split(/\s+/).filter(Boolean);
+  const hasMultipleWords = words.length >= 2;
+  const hasDistinctInitials = hasMultipleWords && words[0]![0]?.toUpperCase() !== words[1]![0]?.toUpperCase();
+  const keywordsLower = chosen_direction.keywords.map(k => k.toLowerCase()).join(" ");
+  const hasMonogramKeyword = /monogram|initial|lettermark|letter/i.test(keywordsLower);
+  const allowMonogram = hasDistinctInitials || hasMonogramKeyword;
+  
   let motifFamily: "loop" | "interlock" | "orbit" | "fold" | "swap" | "monogram-interlock" = "loop"; // Default fallback
+  
+  // Helper to filter out monogram-interlock if not appropriate
+  const filterMonogram = (family: typeof motifFamily): typeof motifFamily => {
+    if (family === "monogram-interlock" && !allowMonogram) {
+      console.log(`⚠️  Skipping monogram-interlock for single-word brand "${intake.brand_name}" (no monogram keyword)`);
+      return "loop"; // Fallback
+    }
+    return family;
+  };
   
   // Priority: execution_directives > selectedConcept > cdConstraints > chosen_direction
   if (executionDirectives?.motif_family && supportedMotifFamilies.includes(executionDirectives.motif_family as typeof motifFamily)) {
-    motifFamily = executionDirectives.motif_family as typeof motifFamily;
+    motifFamily = filterMonogram(executionDirectives.motif_family as typeof motifFamily);
     console.log(`✅ Using execution directive motif: ${motifFamily}`);
   } else if (selectedConcept && supportedMotifFamilies.includes(selectedConcept.motif_family as typeof motifFamily)) {
-    motifFamily = selectedConcept.motif_family as typeof motifFamily;
+    motifFamily = filterMonogram(selectedConcept.motif_family as typeof motifFamily);
     console.log(`✅ Using selected concept motif: ${motifFamily}`);
   } else if (cdConstraints?.motif_family_priority?.length) {
     const priorityFamily = cdConstraints.motif_family_priority.find((f) =>
       supportedMotifFamilies.includes(f as typeof motifFamily),
     );
     if (priorityFamily) {
-      motifFamily = priorityFamily as typeof motifFamily;
+      motifFamily = filterMonogram(priorityFamily as typeof motifFamily);
       console.log(`✅ Using CD constraint motif priority: ${motifFamily}`);
     }
   } else if (chosen_direction.motif_system?.motifs?.length) {
@@ -293,7 +310,7 @@ export async function runExecutorAgent(
       supportedMotifFamilies.includes(m as typeof motifFamily),
     );
     if (fromDirection) {
-      motifFamily = fromDirection as typeof motifFamily;
+      motifFamily = filterMonogram(fromDirection as typeof motifFamily);
       console.log(`✅ Using direction motif_system: ${motifFamily}`);
     } else {
       const scoringFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap"> = [
@@ -318,7 +335,7 @@ export async function runExecutorAgent(
       const best = first && motifCandidates.length > 0
         ? motifCandidates.reduce((a, c) => (c.score > a.score ? c : a), first)
         : { family: "loop" as const, score: 0 };
-      motifFamily = best.family;
+      motifFamily = filterMonogram(best.family);
       console.log(`✅ Selected motif: ${motifFamily}`);
     }
   } else {
@@ -344,7 +361,7 @@ export async function runExecutorAgent(
     const best = first && motifCandidates.length > 0
       ? motifCandidates.reduce((a, c) => (c.score > a.score ? c : a), first)
       : { family: "loop" as const, score: 0 };
-    motifFamily = best.family;
+    motifFamily = filterMonogram(best.family);
     console.log(`✅ Selected motif: ${motifFamily}`);
   }
 

@@ -305,10 +305,15 @@ function buildMonogramInterlock(
     return path1 + " " + path2;
   }
 
-  if (!useTwo) return path1;
-
+  // Always apply transform, even for single initial
   const tx1 = c - fontSize * scale * 0.42;
   const ty = c + fontSize * scale * 0.35;
+  
+  if (!useTwo) {
+    // Single initial: center it in the grid
+    return `<g transform="translate(${tx1},${ty}) scale(${scale})"><path d="${path1}"/></g>`;
+  }
+
   const tx2 = c - fontSize * scale * 0.08;
   return `<g transform="translate(${tx1},${ty}) scale(${scale})"><path d="${path1}"/></g><g transform="translate(${tx2},${ty}) scale(${scale})"><path d="${path2}"/></g>`;
 }

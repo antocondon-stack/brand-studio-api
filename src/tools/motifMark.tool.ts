@@ -46,6 +46,36 @@ function hashSeed(seed: string): number {
   return Math.abs(h);
 }
 
+/**
+ * Approximate bounding box from path data by parsing coordinates
+ */
+function approxBBoxFromPathD(pathD: string): { minX: number; maxX: number; minY: number; maxY: number } {
+  const numbers = pathD.match(/[-+]?\d*\.?\d+/g)?.map(parseFloat).filter(n => !isNaN(n)) || [];
+  if (numbers.length === 0) {
+    return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  }
+  
+  // Pair numbers as coordinates (x, y)
+  const coords: Array<[number, number]> = [];
+  for (let i = 0; i < numbers.length - 1; i += 2) {
+    coords.push([numbers[i]!, numbers[i + 1]!]);
+  }
+  
+  if (coords.length === 0) {
+    return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  }
+  
+  const xs = coords.map(c => c[0]);
+  const ys = coords.map(c => c[1]);
+  
+  return {
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys),
+  };
+}
+
 /** Rounded rect as path (stroke centerline); negative space emphasis */
 function roundedRectPath(
   x: number,
@@ -380,9 +410,17 @@ function buildMonogramInterlock(
     path2 = `${outer2Path} ${inner2Path}`;
     return path1 + " " + path2;
   }
-  if (!useTwo) return path1;
+  // Always apply transform, even for single initial
   const tx1 = c - fontSize * scale * 0.42;
   const ty = c + fontSize * scale * 0.35;
+  
+  if (!useTwo) {
+    // Single initial: center it in the grid
+    return [
+      { d: path1, transform: `translate(${tx1},${ty}) scale(${scale})` },
+    ];
+  }
+  
   const tx2 = c - fontSize * scale * 0.08;
   return [
     { d: path1, transform: `translate(${tx1},${ty}) scale(${scale})` },
@@ -491,6 +529,65 @@ ${fallbackContent}
   }
   if (moveCommandCount < 2 && input.motif_family !== "monogram-interlock") {
     console.warn(`⚠️  Warning: Mark has only ${moveCommandCount} subpath(s) - may lack visual weight`);
+  }
+
+  // Quality gate: detect unscaled/clipped marks
+  let needsFallback = false;
+  let fallbackReason = "";
+  
+  // Extract all path data to check coordinates
+  const pathDataMatches = mark_svg.match(/d=["']([^"']+)["']/gi) || [];
+  const allPathData = pathDataMatches.map(m => {
+    const dMatch = m.match(/d=["']([^"']+)["']/i);
+    return dMatch ? dMatch[1]! : "";
+  }).join(" ");
+  
+  // Check for coordinates far outside viewBox
+  const numbers = allPathData.match(/[-+]?\d*\.?\d+/g)?.map(parseFloat).filter(n => !isNaN(n)) || [];
+  const maxCoord = numbers.length > 0 ? Math.max(...numbers.map(Math.abs)) : 0;
+  if (maxCoord > grid * 4) {
+    needsFallback = true;
+    fallbackReason = `Coordinates outside viewBox (max: ${maxCoord.toFixed(1)} > ${grid * 4})`;
+  }
+  
+  // Check for insufficient paths (non-monogram families)
+  if (pathCount < 2 && input.motif_family !== "monogram-interlock") {
+    needsFallback = true;
+    fallbackReason = `Only ${pathCount} path(s) for non-monogram family`;
+  }
+  
+  // Check for clipped appearance (large bbox)
+  if (allPathData) {
+    const bbox = approxBBoxFromPathD(allPathData);
+    const bboxWidth = bbox.maxX - bbox.minX;
+    const bboxHeight = bbox.maxY - bbox.minY;
+    if (bboxWidth > grid * 3 || bboxHeight > grid * 3) {
+      needsFallback = true;
+      fallbackReason = `Bbox too large (${bboxWidth.toFixed(1)}x${bboxHeight.toFixed(1)} > ${grid * 3})`;
+    }
+  }
+  
+  // Apply fallback if needed
+  if (needsFallback && input.motif_family === "monogram-interlock") {
+    console.warn(`⚠️  Quality gate failed for monogram-interlock: ${fallbackReason}. Falling back to fold/interlock/swap.`);
+    
+    // Deterministic fallback choice based on seed + brand_name
+    const fallbackSeed = hashSeed(`${input.seed}-${input.brand_name}`);
+    const fallbackFamilies: Array<"fold" | "interlock" | "swap"> = ["fold", "interlock", "swap"];
+    const fallbackFamily = fallbackFamilies[fallbackSeed % fallbackFamilies.length]!;
+    
+    const fallbackPath = buildMarkPath({ ...input, motif_family: fallbackFamily });
+    const fallbackContent = Array.isArray(fallbackPath)
+      ? fallbackPath.map((p) => `  <path d="${p.d}" ${pathAttrs} transform="${p.transform}" />`).join("\n")
+      : `  <path d="${fallbackPath}" ${pathAttrs} />`;
+    const fallbackSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${grid}" height="${grid}" viewBox="0 0 ${grid} ${grid}" role="img" aria-label="${input.brand_name} mark">
+${fallbackContent}
+</svg>`.trim();
+    
+    return {
+      mark_svg: fallbackSvg,
+      construction: { grid, stroke_px: effectiveStrokePx, corner_radius_px },
+    };
   }
 
   return {
