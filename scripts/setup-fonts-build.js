@@ -32,14 +32,23 @@ console.log("📦 Cloning Google Fonts repository...");
 console.log(`   Target: ${fontsMainPath}`);
 console.log(`   CWD: ${process.cwd()}`);
 
+// Allow skipping font setup via env var (useful for Railway builds that timeout)
+if (process.env.SKIP_FONT_SETUP === "true") {
+  console.log("⏭️  Skipping font setup (SKIP_FONT_SETUP=true)");
+  console.log("   Fonts will need to be available at runtime or downloaded separately.");
+  process.exit(0);
+}
+
 // Check if git is available
+let gitAvailable = false;
 try {
   const gitVersion = execSync("git --version", { encoding: "utf8", stdio: "pipe" }).trim();
   console.log(`   Git available: ${gitVersion}`);
+  gitAvailable = true;
 } catch (e) {
-  console.error("❌ Git is not available! Cannot clone fonts repository.");
-  console.error("   Please ensure git is installed in the build environment.");
-  process.exit(1);
+  console.warn("⚠️  Git is not available. Skipping font clone.");
+  console.warn("   Fonts will need to be committed to git or downloaded at runtime.");
+  process.exit(0); // Don't fail build, just skip font setup
 }
 
 try {
@@ -107,9 +116,14 @@ try {
 
   console.log(`✅ Google Fonts repository cloned successfully: ${ttfFiles.length} TTF files found`);
 } catch (error) {
-  console.error("❌ Failed to clone Google Fonts repository:", error.message);
-  console.error("   Stack:", error.stack);
-  console.error("   Fonts may not be available. The build will continue but wordmarks may fail.");
+  console.warn("⚠️  Failed to clone Google Fonts repository:", error.message);
+  if (error.stack) {
+    console.warn("   Stack:", error.stack.split("\n").slice(0, 3).join("\n"));
+  }
+  console.warn("   The build will continue. Fonts can be:");
+  console.warn("   1. Committed to git (recommended for production)");
+  console.warn("   2. Downloaded at runtime via a separate process");
+  console.warn("   3. Made available via Railway volume or external storage");
   // Don't fail the build - allow fallback behavior
   process.exit(0);
 }

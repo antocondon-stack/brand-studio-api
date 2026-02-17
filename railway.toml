@@ -1,6 +1,8 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "npm install && npm run build"
+# Skip font clone during build to avoid timeouts
+# Fonts should be committed to git or downloaded at runtime
+buildCommand = "npm install && SKIP_FONT_SETUP=true npm run build"
 
 [deploy]
 startCommand = "npm start"
