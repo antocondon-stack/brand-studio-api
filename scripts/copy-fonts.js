@@ -71,6 +71,32 @@ if (fs.existsSync(fontsSrc)) {
   console.log(`⚠️  assets/fonts not found, skipping`);
 }
 
+// Also copy legacy font files directly to fonts root for backward compatibility
+const legacyFonts = [
+  { name: "DMSerifDisplay-Regular.ttf", source: "fonts-main/ofl/dmserifdisplay/DMSerifDisplay-Regular.ttf" },
+  { name: "SpaceGrotesk-Regular.ttf", source: "fonts-main/ofl/spacegrotesk/SpaceGrotesk[wght].ttf" },
+];
+
+let legacyCount = 0;
+if (fs.existsSync(fontsDst)) {
+  const fontsMainDst = path.join(fontsDst, "fonts-main");
+  for (const legacy of legacyFonts) {
+    const srcPath = path.join(fontsSrc, legacy.source);
+    const dstPath = path.join(fontsDst, legacy.name);
+    if (fs.existsSync(srcPath)) {
+      try {
+        fs.copyFileSync(srcPath, dstPath);
+        legacyCount++;
+      } catch (e) {
+        // Skip if copy fails
+      }
+    }
+  }
+  if (legacyCount > 0) {
+    console.log(`✅ Copied ${legacyCount} legacy font files to dist/assets/fonts/ root`);
+  }
+}
+
 if (googleCount === 0 && fontsCount === 0) {
   console.warn(`⚠️  No fonts copied. Ensure assets/google-fonts or assets/fonts exist.`);
 }
