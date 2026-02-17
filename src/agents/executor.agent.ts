@@ -14,6 +14,15 @@ import {
 import { buildTemplatePreviews } from "../tools/templatePreview.tool";
 import { buildLockupsFromSvgs } from "../tools/lockupsFromSvgs.tool";
 import type { CDConstraints, ComparativeCritique } from "../schemas";
+import {
+  scoreLogoCandidate,
+  passesQualityGate,
+  pickBest,
+  type LogoCandidate,
+  type RankedCandidate,
+} from "../evals/logoQualityGate";
+import { normalizeSvgNumbers } from "../utils/svgUtils";
+import { runWordmarkVariants } from "../tools/wordmarkVariants.tool";
 
 // Schema for the executor output (palette, fonts, templates)
 const ExecutorOutputSchema = z.object({
@@ -178,28 +187,58 @@ export async function runExecutorAgent(
   console.log(`🎨 Palette hexes: [${paletteHexToUse.join(", ")}]`);
   console.log(`🎨 Primary: ${primary}, Secondary: ${secondary}, Accent: ${accent}`);
 
-  // Step 3: Generate wordmark SVG (engine + 12 variants, or fallback to customizer path)
-  console.log("📝 Generating wordmark...");
-  const wordmarkInput = {
-    brand_name: intake.brand_name,
-    direction_name: chosen_direction.name,
-    logo_archetype: chosen_direction.logo_archetype,
-    keywords: chosen_direction.keywords,
-    palette_hex: paletteHexToUse,
-    vibe: chosen_direction.visual_thesis,
-    tracking: 0,
-    regen_seed: runSeed,
-  };
-  let wordmarkResult: { logo_svg_wordmark: string; wordmark_metrics: { viewBox: string; width: number; height: number; centerX: number; centerY: number; path_d: string; primary_color: string }; wordmark_metadata?: FinalKit["wordmark_metadata"] };
-  const variantResult = await buildWordmarkFromVariants(wordmarkInput);
-  if (variantResult) {
-    wordmarkResult = variantResult;
-  } else {
-    wordmarkResult = buildWordmarkSvg(wordmarkInput);
-  }
+  // Step 3: Map executor fonts to available fonts
+  console.log("🔤 Mapping executor fonts to available fonts...");
+  const fontToPathModule = require("../tools/fontToPath.tool");
+  const availableFonts = fontToPathModule.ensureGoogleFontsIndex();
+  const availableFontFamilies = new Set(availableFonts.map((f: { family: string }) => f.family.toLowerCase()));
+  
+  const preferredFonts = [
+    "spacegrotesk", "intertight", "plusjakartasans", "archivo", 
+    "leaguespartan", "bebasneue", "montserratalternates", "inter", "dmserifdisplay"
+  ];
+  
+  const mappedFonts = executorOutput.fonts.map(font => {
+    const requestedFamily = font.family.toLowerCase().replace(/\s+/g, "");
+    if (availableFontFamilies.has(requestedFamily)) {
+      return font;
+    }
+    
+    // Find best match from preferred fonts
+    for (const preferred of preferredFonts) {
+      if (availableFontFamilies.has(preferred)) {
+        console.log(`   Mapping "${font.family}" -> "${preferred}"`);
+        return { ...font, family: preferred };
+      }
+    }
+    
+    // Fallback to first available font
+    if (availableFonts.length > 0) {
+      const fallback = availableFonts[0]!;
+      console.log(`   Mapping "${font.family}" -> "${fallback.family}" (fallback)`);
+      return { ...font, family: fallback.family };
+    }
+    
+    return font;
+  });
 
-  // Step 4: Generate motif mark candidates and select best
-  console.log("🎯 Generating motif mark candidates...");
+  // Step 4: Generate wordmark variants (12 candidates)
+  console.log("📝 Generating wordmark variants...");
+  const wordmarkFontFamily = mappedFonts[0]?.family ?? "Space Grotesk";
+  const wordmarkVariantsInput = {
+    text: intake.brand_name,
+    fontFamily: wordmarkFontFamily,
+    fontWeight: 700,
+    fontStyle: "normal" as const,
+    fontSize: 64,
+    tracking: 0,
+    seed: runSeed ?? `${intake.brand_name}-${chosen_direction.name}`,
+  };
+  const wordmarkVariantsResult = await runWordmarkVariants(wordmarkVariantsInput);
+  const topWordmarkVariants = wordmarkVariantsResult.variants.slice(0, 4); // Top 4
+
+  // Step 5: Generate motif mark candidates (12 candidates) and select best
+  console.log("🎯 Generating motif mark candidates (12 variants)...");
 
   const seedNum = intake.brand_name.length + chosen_direction.name.length;
   const seed = runSeed
@@ -351,157 +390,339 @@ export async function runExecutorAgent(
     return Math.max(0, score); // Ensure non-negative
   }
 
-  // Generate 9 motif mark candidates: 3 from chosen family, 6 from adjacent families
-  // Use primary color from actual palette
+  // Generate 12 motif mark candidates with variation
   const primaryColor = primary;
-  const motifCandidates = [];
+  const motifCandidates: Array<{
+    result: { mark_svg: string; construction: { grid: number; stroke_px: number; corner_radius_px: number } };
+    family: typeof motifFamily;
+    stroke_px: number;
+    corner_radius_px: number;
+    variant: number;
+    use_fill: boolean;
+    score: number;
+  }> = [];
   
-  // Derive variant from seed deterministically (0-5), or use execution_directives.variant_targets
   const variantSeed = seed.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
   const baseVariant = variantSeed % 6;
   const variantTargets = executionDirectives?.variant_targets?.length
     ? executionDirectives.variant_targets
     : [baseVariant, (baseVariant + 1) % 6, (baseVariant + 2) % 6];
   
-  // Apply geometry adjustments from execution_directives
   const geometryAdjustments = executionDirectives?.geometry_adjustments ?? [];
   const banCircles = cdConstraints?.must_avoid.single_badge_circle ?? false;
   const banFullRings = cdConstraints?.must_avoid.full_rings ?? false;
   const banConcentricRings = cdConstraints?.must_avoid.concentric_rings ?? false;
   
-  console.log(`🎯 Motif settings: family=${motifFamily}, variants=[${variantTargets.join(",")}], use_fill=true, stroke_px=5`);
-  if (geometryAdjustments.length > 0) {
-    console.log(`   Geometry adjustments: ${geometryAdjustments.join(", ")}`);
-  }
-  if (banCircles || banFullRings || banConcentricRings) {
-    console.log(`   Constraints: banCircles=${banCircles}, banFullRings=${banFullRings}, banConcentricRings=${banConcentricRings}`);
+  console.log(`🎯 Generating 12 mark candidates: family=${motifFamily}, variants=[${variantTargets.join(",")}]`);
+  
+  const allFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap" | "monogram-interlock"> = 
+    ["loop", "interlock", "orbit", "fold", "swap", "monogram-interlock"];
+  
+  // Generate 12 candidates: vary family, variant, stroke, corner radius, use_fill
+  const candidateConfigs: Array<{
+    family: typeof motifFamily;
+    variant: number;
+    strokePx: number;
+    cornerRadiusPx: number;
+    useFill: boolean;
+  }> = [];
+  
+  // 4 from chosen family with variations
+  for (let i = 0; i < 4; i++) {
+    candidateConfigs.push({
+      family: motifFamily,
+      variant: variantTargets[i % variantTargets.length] ?? (baseVariant + i) % 6,
+      strokePx: i < 2 ? 5 : 3,
+      cornerRadiusPx: i % 2 === 0 ? 3 : 0,
+      useFill: true,
+    });
   }
   
-  // Get adjacent families (families that are visually/compositionally related)
-  const allFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap" | "monogram-interlock"> = ["loop", "interlock", "orbit", "fold", "swap", "monogram-interlock"];
-  const currentFamilyIndex = allFamilies.indexOf(motifFamily);
-  const adjacentFamilies: Array<"loop" | "interlock" | "orbit" | "fold" | "swap" | "monogram-interlock"> = [];
-  for (let i = 0; i < 6; i++) {
-    const idx = (currentFamilyIndex + i + 1) % allFamilies.length;
-    const family = allFamilies[idx];
-    if (family && family !== motifFamily && !adjacentFamilies.includes(family)) {
-      adjacentFamilies.push(family);
+  // 8 from other families
+  const otherFamilies = allFamilies.filter((f): f is typeof motifFamily => f !== motifFamily);
+  for (let i = 0; i < 8; i++) {
+    const family = otherFamilies[i % otherFamilies.length]!;
+    candidateConfigs.push({
+      family,
+      variant: (baseVariant + i) % 6,
+      strokePx: i < 4 ? 5 : (i < 6 ? 4 : 2),
+      cornerRadiusPx: i % 3 === 0 ? 3 : (i % 3 === 1 ? 2 : 0),
+      useFill: i < 6,
+    });
+  }
+  
+  // Generate all 12 mark candidates
+  for (let i = 0; i < candidateConfigs.length; i++) {
+    const config = candidateConfigs[i]!;
+    const candidateSeed = `${seed}-mark-${i}`;
+    
+    const candidate = generateMotifMark({
+      brand_name: intake.brand_name,
+      motif_family: config.family,
+      seed: candidateSeed,
+      grid: 24,
+      stroke_px: config.strokePx,
+      corner_radius_px: config.cornerRadiusPx,
+      primary_hex: primaryColor,
+      variant: config.variant,
+      use_fill: config.useFill,
+    });
+
+    const svg = normalizeSvgNumbers(candidate.mark_svg);
+    const score = scoreMotifCandidate(svg, config.family, config.strokePx);
+    
+    motifCandidates.push({
+      result: { ...candidate, mark_svg: svg },
+      family: config.family,
+      stroke_px: config.strokePx,
+      corner_radius_px: config.cornerRadiusPx,
+      variant: config.variant,
+      use_fill: config.useFill,
+      score,
+    });
+  }
+
+  // Select top 4 mark candidates
+  const topMarkCandidates = [...motifCandidates]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 4);
+  
+  console.log(`✅ Top 4 mark candidates selected`);
+  
+  // Step 6: Build combined logo candidates (top 4 wordmarks × top 4 marks = 16 candidates)
+  console.log("🎨 Building combined logo candidates (16 total)...");
+  const logoCandidates: LogoCandidate[] = [];
+  
+  for (const wordmarkVariant of topWordmarkVariants) {
+    for (const markCandidate of topMarkCandidates) {
+      const wordmarkSvg = normalizeSvgNumbers(wordmarkVariant.svg);
+      const markSvg = markCandidate.result.mark_svg;
+      
+      // Build lockups
+      const lockups = buildLockupsFromSvgs({
+        brand_name: intake.brand_name,
+        wordmark_svg: wordmarkSvg,
+        wordmark_metrics: {
+          viewBox: `0 0 ${wordmarkVariant.bbox.w} ${wordmarkVariant.bbox.h}`,
+          width: wordmarkVariant.bbox.w,
+          height: wordmarkVariant.bbox.h,
+          centerX: wordmarkVariant.bbox.x + wordmarkVariant.bbox.w / 2,
+          centerY: wordmarkVariant.bbox.y + wordmarkVariant.bbox.h / 2,
+          path_d: wordmarkVariant.paths.map(p => p.d).join(" "),
+          primary_color: primary,
+        },
+        mark_svg: markSvg,
+        palette_hex: paletteHexToUse,
+        regen_seed: runSeed,
+      });
+      
+      logoCandidates.push({
+        markSvg,
+        wordmarkSvg,
+        horizontal: normalizeSvgNumbers(lockups.horizontal_svg),
+        stacked: normalizeSvgNumbers(lockups.stacked_svg),
+        metadata: {
+          markFamily: markCandidate.family,
+          markVariant: markCandidate.variant,
+          wordmarkFontFamily: wordmarkVariant.settingsApplied.fontFamily,
+          wordmarkWeight: wordmarkVariant.settingsApplied.fontWeight,
+          wordmarkTracking: wordmarkVariant.settingsApplied.tracking,
+        },
+      });
     }
   }
   
-  // 3 candidates from chosen motif family (use variant_targets if provided)
-  const numCandidates = Math.min(3, variantTargets.length);
-  for (let i = 0; i < numCandidates; i++) {
-    const candidateSeed = `${seed}-chosen-${i}`;
-    const strokePx = 5; // Set to 5px for bolder marks
-    const cornerRadiusPx = 3; // Set to 3px
-    const variant = variantTargets[i] ?? (baseVariant + i) % 6; // Use variant_targets if available
+  // Step 7: Score candidates with quality gate
+  console.log("📊 Scoring logo candidates with quality gate...");
+  const directionKeywords = chosen_direction.keywords;
+  const rankedCandidates: RankedCandidate[] = logoCandidates.map(candidate => ({
+    candidate,
+    score: scoreLogoCandidate(candidate, directionKeywords),
+  }));
+  
+  const { best: bestRanked } = pickBest(rankedCandidates);
+  const bestCandidate = bestRanked.candidate;
+  const bestScore = bestRanked.score;
+  
+  console.log(`📊 Best candidate score: ${bestScore.total.toFixed(2)} (legibility: ${bestScore.breakdown.legibility.toFixed(1)}, ownability: ${bestScore.breakdown.ownability.toFixed(1)}, boldness: ${bestScore.breakdown.boldness.toFixed(1)}, coherence: ${bestScore.breakdown.coherence.toFixed(1)}, craft: ${bestScore.breakdown.craft.toFixed(1)})`);
+  
+  // Step 8: Quality gate with retry logic
+  let finalCandidate = bestCandidate;
+  let finalScore = bestScore;
+  let retryCount = 0;
+  const maxRetries = 2;
+  
+  while (!passesQualityGate(finalScore) && retryCount < maxRetries) {
+    retryCount++;
+    console.log(`⚠️  Quality gate failed (total: ${finalScore.total.toFixed(2)}, legibility: ${finalScore.breakdown.legibility.toFixed(1)}, ownability: ${finalScore.breakdown.ownability.toFixed(1)}). Retry ${retryCount}/${maxRetries}...`);
     
-    const candidate = generateMotifMark({
-      brand_name: intake.brand_name,
-      motif_family: motifFamily,
-      seed: candidateSeed,
+    // Retry 1: Force use_fill=true, increase stroke, switch to interlock/fold
+    if (retryCount === 1) {
+      const retryFamilies = directionKeywords.some(k => /interlock|connect/i.test(k)) 
+        ? ["interlock"] 
+        : directionKeywords.some(k => /fold|crease/i.test(k))
+        ? ["fold"]
+        : ["interlock", "fold"];
+      
+      const retryCandidates: LogoCandidate[] = [];
+      for (const wordmarkVariant of topWordmarkVariants.slice(0, 2)) {
+        for (const retryFamily of retryFamilies) {
+          const retrySeed = `${seed}-retry1-${retryFamily}`;
+          const retryMark = generateMotifMark({
+            brand_name: intake.brand_name,
+            motif_family: retryFamily as typeof motifFamily,
+            seed: retrySeed,
+            grid: 24,
+            stroke_px: 6,
+            corner_radius_px: 3,
+            primary_hex: primaryColor,
+            variant: baseVariant,
+            use_fill: true,
+          });
+          
+          const wordmarkSvg = normalizeSvgNumbers(wordmarkVariant.svg);
+          const markSvg = normalizeSvgNumbers(retryMark.mark_svg);
+          
+          const lockups = buildLockupsFromSvgs({
+            brand_name: intake.brand_name,
+            wordmark_svg: wordmarkSvg,
+            wordmark_metrics: {
+              viewBox: `0 0 ${wordmarkVariant.bbox.w} ${wordmarkVariant.bbox.h}`,
+              width: wordmarkVariant.bbox.w,
+              height: wordmarkVariant.bbox.h,
+              centerX: wordmarkVariant.bbox.x + wordmarkVariant.bbox.w / 2,
+              centerY: wordmarkVariant.bbox.y + wordmarkVariant.bbox.h / 2,
+              path_d: wordmarkVariant.paths.map(p => p.d).join(" "),
+              primary_color: primary,
+            },
+            mark_svg: markSvg,
+            palette_hex: paletteHexToUse,
+            regen_seed: runSeed,
+          });
+          
+          retryCandidates.push({
+            markSvg,
+            wordmarkSvg,
+            horizontal: normalizeSvgNumbers(lockups.horizontal_svg),
+            stacked: normalizeSvgNumbers(lockups.stacked_svg),
+            metadata: {
+              markFamily: retryFamily,
+              markVariant: baseVariant,
+              wordmarkFontFamily: wordmarkVariant.settingsApplied.fontFamily,
+              wordmarkWeight: wordmarkVariant.settingsApplied.fontWeight,
+              wordmarkTracking: wordmarkVariant.settingsApplied.tracking,
+            },
+          });
+        }
+      }
+      
+      const retryRanked = retryCandidates.map(c => ({
+        candidate: c,
+        score: scoreLogoCandidate(c, directionKeywords),
+      }));
+      const retryBest = pickBest(retryRanked).best;
+      if (retryBest.score.total > finalScore.total) {
+        finalCandidate = retryBest.candidate;
+        finalScore = retryBest.score;
+      }
+    }
+    
+    // Retry 2: Monogram-interlock if brand has distinct initials, force weight 800
+    if (retryCount === 2 && !passesQualityGate(finalScore)) {
+      const initials = intake.brand_name.split(" ").map(w => w[0]).filter(Boolean).join("").toUpperCase();
+      if (initials.length >= 2) {
+        const monogramMark = generateMotifMark({
+          brand_name: intake.brand_name,
+          motif_family: "monogram-interlock",
+          seed: `${seed}-retry2-monogram`,
+          grid: 24,
+          stroke_px: 5,
+          corner_radius_px: 3,
+          primary_hex: primaryColor,
+          variant: 0,
+          use_fill: true,
+        });
+        
+        // Use heaviest wordmark variant
+        const heaviestWordmark = topWordmarkVariants
+          .sort((a, b) => (b.settingsApplied.fontWeight ?? 400) - (a.settingsApplied.fontWeight ?? 400))[0]!;
+        
+        const wordmarkSvg = normalizeSvgNumbers(heaviestWordmark.svg);
+        const markSvg = normalizeSvgNumbers(monogramMark.mark_svg);
+        
+        const lockups = buildLockupsFromSvgs({
+          brand_name: intake.brand_name,
+          wordmark_svg: wordmarkSvg,
+          wordmark_metrics: {
+            viewBox: `0 0 ${heaviestWordmark.bbox.w} ${heaviestWordmark.bbox.h}`,
+            width: heaviestWordmark.bbox.w,
+            height: heaviestWordmark.bbox.h,
+            centerX: heaviestWordmark.bbox.x + heaviestWordmark.bbox.w / 2,
+            centerY: heaviestWordmark.bbox.y + heaviestWordmark.bbox.h / 2,
+            path_d: heaviestWordmark.paths.map(p => p.d).join(" "),
+            primary_color: primary,
+          },
+          mark_svg: markSvg,
+          palette_hex: paletteHexToUse,
+          regen_seed: runSeed,
+        });
+        
+        const monogramCandidate: LogoCandidate = {
+          markSvg,
+          wordmarkSvg,
+          horizontal: normalizeSvgNumbers(lockups.horizontal_svg),
+          stacked: normalizeSvgNumbers(lockups.stacked_svg),
+          metadata: {
+            markFamily: "monogram-interlock",
+            markVariant: 0,
+            wordmarkFontFamily: heaviestWordmark.settingsApplied.fontFamily,
+            wordmarkWeight: heaviestWordmark.settingsApplied.fontWeight,
+            wordmarkTracking: 0,
+          },
+        };
+        
+        const monogramScore = scoreLogoCandidate(monogramCandidate, directionKeywords);
+        if (monogramScore.total > finalScore.total) {
+          finalCandidate = monogramCandidate;
+          finalScore = monogramScore;
+        }
+      }
+    }
+  }
+  
+  if (!passesQualityGate(finalScore)) {
+    console.warn(`⚠️  Quality gate still failed after ${retryCount} retries. Using best available candidate.`);
+    console.warn(`   Failures: ${finalScore.failures.join("; ")}`);
+  } else {
+    console.log(`✅ Quality gate passed!`);
+  }
+  
+  const motifResult = {
+    mark_svg: finalCandidate.markSvg,
+    construction: {
       grid: 24,
-      stroke_px: strokePx,
-      corner_radius_px: cornerRadiusPx,
-      primary_hex: primaryColor,
-      variant,
-      use_fill: true, // Always use fill for premium marks
-    });
+      stroke_px: 5,
+      corner_radius_px: 3,
+    },
+  };
 
-    const svg = candidate.mark_svg;
-    const score = scoreMotifCandidate(svg, motifFamily, strokePx);
-    
-    motifCandidates.push({
-      result: candidate,
-      family: motifFamily,
-      stroke_px: strokePx,
-      corner_radius_px: cornerRadiusPx,
-      variant,
-      use_fill: true,
-      score,
-    });
-  }
-  
-  // 6 candidates from adjacent families (exclude monogram-interlock for scoring)
-  const adjacentFamiliesForScoring = adjacentFamilies.filter((f): f is "loop" | "interlock" | "orbit" | "fold" | "swap" => f !== "monogram-interlock");
-  for (let i = 0; i < 6; i++) {
-    const family = adjacentFamiliesForScoring[i % adjacentFamiliesForScoring.length];
-    if (!family) continue;
-    
-    const candidateSeed = `${seed}-adjacent-${i}`;
-    const strokePx = 5; // Set to 5px for bolder marks
-    const cornerRadiusPx = 3; // Set to 3px
-    const variant = (baseVariant + i) % 6; // 0-5
-    
-    const candidate = generateMotifMark({
-      brand_name: intake.brand_name,
-      motif_family: family,
-      seed: candidateSeed,
-      grid: 24,
-      stroke_px: strokePx,
-      corner_radius_px: cornerRadiusPx,
-      primary_hex: primaryColor,
-      variant,
-      use_fill: true, // Always use fill for premium marks
-    });
-
-    const svg = candidate.mark_svg;
-    const score = scoreMotifCandidate(svg, family, strokePx);
-    
-    motifCandidates.push({
-      result: candidate,
-      family,
-      stroke_px: strokePx,
-      corner_radius_px: cornerRadiusPx,
-      variant,
-      use_fill: true,
-      score,
-    });
-  }
-
-  // Select best candidate
-  const bestCandidate = motifCandidates.reduce((best, current) =>
-    current.score > best.score ? current : best
-  );
-  
-  console.log(`✅ Selected motif mark: family=${bestCandidate.family}, variant=${bestCandidate.variant}, use_fill=${bestCandidate.use_fill}, stroke_px=${bestCandidate.stroke_px}, score=${bestCandidate.score}`);
-  console.log(`🔗 Lockups built from motif mark (not legacy circle badge)`);
-  
-  // Sanity assert: no <text> in mark
-  if (bestCandidate.result.mark_svg.includes("<text")) {
-    throw new Error("Selected motif mark contains <text> tag - must be path-only");
-  }
-  
-  // Sanity assert: mark is not primarily circles
-  const circleCount = (bestCandidate.result.mark_svg.match(/<circle/g) || []).length;
-  if (circleCount > 0) {
-    console.warn(`⚠️  Warning: Selected mark contains ${circleCount} circle(s) - should use tension-based geometry`);
-  }
-  
-  const motifResult = bestCandidate.result;
-
-  // Step 5: Build lockups from motif mark + wordmark
-  console.log("🔗 Building lockups from motif mark + wordmark...");
-  const lockups = buildLockupsFromSvgs({
-    brand_name: intake.brand_name,
-    wordmark_svg: wordmarkResult.logo_svg_wordmark,
-    wordmark_metrics: wordmarkResult.wordmark_metrics,
-    mark_svg: motifResult.mark_svg,
-    palette_hex: paletteHexToUse,
-    regen_seed: runSeed,
-  });
+  // Lockups already built in quality gate step
+  const lockups = {
+    horizontal_svg: finalCandidate.horizontal ?? "",
+    stacked_svg: finalCandidate.stacked ?? "",
+    mark_only_svg: motifResult.mark_svg,
+  };
 
   // Sanity asserts: no <text> in any logo outputs
   if (lockups.horizontal_svg.includes("<text") || lockups.stacked_svg.includes("<text") || lockups.mark_only_svg.includes("<text")) {
     throw new Error("Lockups contain <text> tag - must be path-only");
   }
   
-  if (wordmarkResult.logo_svg_wordmark.includes("<text")) {
+  if (finalCandidate.wordmarkSvg.includes("<text")) {
     throw new Error("Wordmark contains <text> tag - must be path-only");
   }
   
-  if (motifResult.mark_svg.includes("<text")) {
+  if (finalCandidate.markSvg.includes("<text")) {
     throw new Error("Motif mark contains <text> tag - must be path-only");
   }
   
@@ -529,10 +750,10 @@ export async function runExecutorAgent(
   });
 
   const finalKit: FinalKit = {
-    logo_svg_wordmark: wordmarkResult.logo_svg_wordmark,
-    logo_svg_mark: motifResult.mark_svg,
+    logo_svg_wordmark: finalCandidate.wordmarkSvg,
+    logo_svg_mark: finalCandidate.markSvg,
     palette: executorOutput.palette,
-    fonts: executorOutput.fonts,
+    fonts: mappedFonts,
     templates,
     logo_lockups: {
       horizontal_svg: lockups.horizontal_svg,
@@ -541,8 +762,8 @@ export async function runExecutorAgent(
     },
     construction: {
       grid: 24,
-      stroke_px: bestCandidate.stroke_px,
-      corner_radius_px: bestCandidate.corner_radius_px,
+      stroke_px: 5,
+      corner_radius_px: 3,
       clearspace_ratio: 1.0,
       min_size_px: 16,
     },
@@ -557,8 +778,23 @@ export async function runExecutorAgent(
       composition: selectedConcept.composition,
     };
   }
-  if (wordmarkResult.wordmark_metadata) {
-    finalKit.wordmark_metadata = wordmarkResult.wordmark_metadata;
+  
+  // Add wordmark metadata from best variant
+  const bestWordmarkVariant = topWordmarkVariants[0];
+  if (bestWordmarkVariant) {
+    finalKit.wordmark_metadata = {
+      fontFamily: bestWordmarkVariant.settingsApplied.fontFamily,
+      fontWeight: bestWordmarkVariant.settingsApplied.fontWeight,
+      seed: runSeed ?? `${intake.brand_name}-${chosen_direction.name}`,
+      settingsApplied: {
+        fontFamily: bestWordmarkVariant.settingsApplied.fontFamily,
+        fontWeight: bestWordmarkVariant.settingsApplied.fontWeight,
+        fontSize: bestWordmarkVariant.settingsApplied.fontSize,
+        tracking: bestWordmarkVariant.settingsApplied.tracking,
+        kerning: bestWordmarkVariant.settingsApplied.kerning,
+      },
+      scoreBreakdown: bestWordmarkVariant.evaluation.breakdown,
+    };
   }
 
   return FinalKitSchema.parse(finalKit);
