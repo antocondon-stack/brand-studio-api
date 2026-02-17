@@ -54,6 +54,12 @@ function getGoogleFontsDirs(): string[] {
 
 function inferWeightFromFilename(filename: string): number | undefined {
   const lower = filename.toLowerCase();
+  
+  // Variable fonts (e.g., SpaceGrotesk[wght].ttf) support all weights - return undefined to indicate variable
+  if (lower.includes("[wght]") || lower.includes("[weight]")) {
+    return undefined; // Variable font - will match any weight request
+  }
+  
   if (lower.includes("thin")) return 100;
   if (lower.includes("extralight") || lower.includes("extra-light")) return 200;
   if (lower.includes("light")) return 300;
@@ -154,7 +160,7 @@ function normalizeFamilyName(family: string): string {
   return family.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function resolveGoogleFontTtf(
+export function resolveGoogleFontTtf(
   family: string,
   weight: number,
   style: "normal" | "italic",
@@ -171,11 +177,25 @@ function resolveGoogleFontTtf(
   const withStyle = candidates.filter((e) => (e.style ?? "normal") === style);
   const candidatesToUse = withStyle.length > 0 ? withStyle : candidates;
 
+  // Check for variable fonts first (weight === undefined means variable font)
+  const variableFonts = candidatesToUse.filter((e) => e.weight === undefined);
+  if (variableFonts.length > 0) {
+    // Variable fonts support all weights - return the first one
+    const variableFont = variableFonts[0]!;
+    if (fs.existsSync(variableFont.fullPath)) {
+      return variableFont.fullPath;
+    }
+  }
+
+  // For fixed-weight fonts, find the best match
   let best: FontIndexEntry | null = null;
   let bestWeightDiff = Infinity;
 
   for (const candidate of candidatesToUse) {
-    const candidateWeight = candidate.weight ?? 400;
+    // Skip variable fonts (already handled above)
+    if (candidate.weight === undefined) continue;
+    
+    const candidateWeight = candidate.weight;
     const diff = Math.abs(candidateWeight - weight);
     if (diff < bestWeightDiff) {
       bestWeightDiff = diff;

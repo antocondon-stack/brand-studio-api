@@ -198,25 +198,42 @@ export async function runExecutorAgent(
     "leaguespartan", "bebasneue", "montserratalternates", "inter", "dmserifdisplay"
   ];
   
+  // Map font names to display names (Google Fonts resolver handles normalization internally)
+  const fontDisplayNames: Record<string, string> = {
+    "spacegrotesk": "Space Grotesk",
+    "intertight": "Inter Tight",
+    "plusjakartasans": "Plus Jakarta Sans",
+    "archivo": "Archivo",
+    "leaguespartan": "League Spartan",
+    "bebasneue": "Bebas Neue",
+    "montserratalternates": "Montserrat Alternates",
+    "inter": "Inter",
+    "dmserifdisplay": "DM Serif Display",
+  };
+  
   const mappedFonts = executorOutput.fonts.map(font => {
     const requestedFamily = font.family.toLowerCase().replace(/\s+/g, "");
     if (availableFontFamilies.has(requestedFamily)) {
-      return font;
+      // Use display name if available, otherwise keep original
+      const displayName = fontDisplayNames[requestedFamily] ?? font.family;
+      return { ...font, family: displayName };
     }
     
     // Find best match from preferred fonts
     for (const preferred of preferredFonts) {
       if (availableFontFamilies.has(preferred)) {
-        console.log(`   Mapping "${font.family}" -> "${preferred}"`);
-        return { ...font, family: preferred };
+        const displayName = fontDisplayNames[preferred] ?? preferred;
+        console.log(`   Mapping "${font.family}" -> "${displayName}"`);
+        return { ...font, family: displayName };
       }
     }
     
     // Fallback to first available font
     if (availableFonts.length > 0) {
       const fallback = availableFonts[0]!;
-      console.log(`   Mapping "${font.family}" -> "${fallback.family}" (fallback)`);
-      return { ...font, family: fallback.family };
+      const displayName = fontDisplayNames[fallback.family.toLowerCase()] ?? fallback.family;
+      console.log(`   Mapping "${font.family}" -> "${displayName}" (fallback)`);
+      return { ...font, family: displayName };
     }
     
     return font;

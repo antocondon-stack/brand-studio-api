@@ -46,16 +46,30 @@ function ensureCacheDir(): void {
 }
 
 function resolveLocalFont(fontFamily: string, fontWeight: number): string | null {
+  // First try local font map
   const name = fontWeight >= 700 ? "Inter-Bold" : fontFamily;
   const file = LOCAL_FONT_MAP[name] ?? LOCAL_FONT_MAP[fontFamily];
-  if (!file) return null;
-  const base = file.replace(/\.(ttf|otf)$/i, "");
-  for (const dir of FONT_DIRS) {
-    for (const ext of [".ttf", ".otf"]) {
-      const p = path.join(dir, base + ext);
-      if (fs.existsSync(p)) return p;
+  if (file) {
+    const base = file.replace(/\.(ttf|otf)$/i, "");
+    for (const dir of FONT_DIRS) {
+      for (const ext of [".ttf", ".otf"]) {
+        const p = path.join(dir, base + ext);
+        if (fs.existsSync(p)) return p;
+      }
     }
   }
+  
+  // Fallback to Google Fonts resolver
+  try {
+    const fontToPathModule = require("./fontToPath.tool");
+    const googlePath = fontToPathModule.resolveGoogleFontTtf?.(fontFamily, fontWeight, "normal");
+    if (googlePath && fs.existsSync(googlePath)) {
+      return googlePath;
+    }
+  } catch (e) {
+    // Google Fonts resolver not available, continue
+  }
+  
   return null;
 }
 
