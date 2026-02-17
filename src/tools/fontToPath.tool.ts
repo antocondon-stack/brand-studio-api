@@ -37,11 +37,12 @@ let googleFontIndex: FontIndexEntry[] | null = null;
 
 function getGoogleFontsDirs(): string[] {
   const dirs: string[] = [];
+  // Check dist first (production build)
+  dirs.push(path.join(process.cwd(), "dist", "assets", "google-fonts"));
   if (process.env.GOOGLE_FONTS_DIR) {
     dirs.push(path.resolve(process.env.GOOGLE_FONTS_DIR));
   }
   dirs.push(path.join(process.cwd(), "assets", "google-fonts"));
-  dirs.push(path.join(process.cwd(), "dist", "assets", "google-fonts"));
   if (process.platform !== "win32") {
     dirs.push("/app/assets/google-fonts"); // Railway safety
   }
@@ -111,6 +112,8 @@ function buildGoogleFontsIndex(rootDir: string): FontIndexEntry[] {
   return index;
 }
 
+let googleFontsStartupLogged = false;
+
 export function ensureGoogleFontsIndex(): FontIndexEntry[] {
   if (googleFontIndex !== null) return googleFontIndex;
 
@@ -119,13 +122,20 @@ export function ensureGoogleFontsIndex(): FontIndexEntry[] {
     if (fs.existsSync(dir)) {
       googleFontIndex = buildGoogleFontsIndex(dir);
       if (googleFontIndex.length > 0) {
-        console.log(`Google Fonts index built: ${googleFontIndex.length} files from ${dir}`);
+        if (!googleFontsStartupLogged) {
+          console.log(`✅ Google Fonts index built: ${googleFontIndex.length} files from ${dir}`);
+          googleFontsStartupLogged = true;
+        }
         return googleFontIndex;
       }
     }
   }
 
   googleFontIndex = [];
+  if (!googleFontsStartupLogged) {
+    console.warn(`⚠️  Google Fonts directory not found. Tried: ${dirs.join(", ")}`);
+    googleFontsStartupLogged = true;
+  }
   return googleFontIndex;
 }
 
@@ -266,7 +276,19 @@ export function countPathCommands(path_d: string): number {
 }
 
 /**
+ * Detect placeholder rectangle (simple M/L/Z path with 4-5 points)
+ */
+function isPlaceholderRectangle(path_d: string): boolean {
+  const commands = path_d.match(/[MLCQAZ]/gi) || [];
+  if (commands.length < 4 || commands.length > 6) return false;
+  const coords = path_d.match(/[\d.]+/g) || [];
+  const uniqueCoords = new Set(coords.map((c) => parseFloat(c).toFixed(1))).size;
+  return uniqueCoords <= 8 && /^M\s+[\d.]+\s+[\d.]+\s+L\s+[\d.]+\s+[\d.]+\s+L\s+[\d.]+\s+[\d.]+\s+L\s+[\d.]+\s+[\d.]+\s+Z$/i.test(path_d.trim().replace(/\s+/g, " "));
+}
+
+/**
  * Quality gate: Check if path has sufficient detail (not a placeholder rectangle)
+ * Throws error in production unless ALLOW_WORDMARK_FALLBACK=true or DEMO_MODE=true
  */
 function validatePathQuality(
   path_d: string,
@@ -275,13 +297,32 @@ function validatePathQuality(
   font_size: number,
 ): void {
   const commandCount = countPathCommands(path_d);
+  const allowFallback = process.env.ALLOW_WORDMARK_FALLBACK === "true" || process.env.DEMO_MODE === "true";
+  
+  // Check if placeholder rectangle
+  if (isPlaceholderRectangle(path_d)) {
+    if (!allowFallback) {
+      throw new Error(
+        `FontToPath quality check failed: placeholder rectangle detected. ` +
+        `This indicates fonts are missing. Set ALLOW_WORDMARK_FALLBACK=true for local demos only. ` +
+        `Check /debug/fonts endpoint for font availability.`
+      );
+    }
+    console.warn("⚠️  Placeholder rectangle detected (ALLOW_WORDMARK_FALLBACK=true)");
+    return;
+  }
   
   // Check command count (real glyphs have many commands)
   if (commandCount < 30) {
-    throw new Error(
-      `FontToPath quality check failed: path has only ${commandCount} commands (expected >= 30). ` +
-      `This suggests font loading failed or produced a placeholder shape.`
-    );
+    if (!allowFallback) {
+      throw new Error(
+        `FontToPath quality check failed: path has only ${commandCount} commands (expected >= 30). ` +
+        `This suggests font loading failed or produced a placeholder shape. ` +
+        `Check /debug/fonts endpoint for font availability.`
+      );
+    }
+    console.warn(`⚠️  Low command count ${commandCount} (ALLOW_WORDMARK_FALLBACK=true)`);
+    return;
   }
   
   // Check dimensions (real glyphs have reasonable aspect ratios)
@@ -303,10 +344,14 @@ function validatePathQuality(
   const coords = path_d.match(/[\d.]+/g) || [];
   const uniqueCoords = new Set(coords.map(c => parseFloat(c).toFixed(1))).size;
   if (uniqueCoords < 10) {
-    throw new Error(
-      `FontToPath quality check failed: path has only ${uniqueCoords} unique coordinates ` +
-      `(expected >= 10). This suggests a placeholder shape.`
-    );
+    if (!allowFallback) {
+      throw new Error(
+        `FontToPath quality check failed: path has only ${uniqueCoords} unique coordinates ` +
+        `(expected >= 10). This suggests a placeholder shape. ` +
+        `Check /debug/fonts endpoint for font availability.`
+      );
+    }
+    console.warn(`⚠️  Low unique coordinates ${uniqueCoords} (ALLOW_WORDMARK_FALLBACK=true)`);
   }
 }
 

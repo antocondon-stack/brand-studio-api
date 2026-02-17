@@ -534,8 +534,15 @@ export function buildWordmarkSvg(input: DeterministicSvgInput) {
       wordmarkHeight = withGlyphs.height;
 
       const cmdCount = (wordmarkPath.match(/[MLCQAZ]/gi) || []).length;
+      const allowFallback = process.env.ALLOW_WORDMARK_FALLBACK === "true" || process.env.DEMO_MODE === "true";
       if (cmdCount < 30) {
-        console.warn("wordmark too simple; likely font missing or conversion failed");
+        if (!allowFallback) {
+          throw new Error(
+            `Wordmark quality check failed: only ${cmdCount} commands (expected >= 30). ` +
+            `Fonts may be missing. Check /debug/fonts endpoint. Set ALLOW_WORDMARK_FALLBACK=true for local demos only.`
+          );
+        }
+        console.warn(`⚠️  Wordmark too simple: ${cmdCount} commands (ALLOW_WORDMARK_FALLBACK=true)`);
       }
     } else {
       throw new Error("No glyphs");
@@ -559,8 +566,17 @@ export function buildWordmarkSvg(input: DeterministicSvgInput) {
       );
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
+      const allowFallback = process.env.ALLOW_WORDMARK_FALLBACK === "true" || process.env.DEMO_MODE === "true";
+      if (!allowFallback) {
+        throw new Error(
+          `Font loading failed: ${errorMsg}. ` +
+          `Placeholder wordmarks are disabled in production. ` +
+          `Check /debug/fonts endpoint for font availability. ` +
+          `Set ALLOW_WORDMARK_FALLBACK=true for local demos only.`
+        );
+      }
       console.error(`⚠️  Font loading failed: ${errorMsg}`);
-      console.error(`⚠️  Using fallback wordmark. Please add font files to assets/fonts/ and redeploy.`);
+      console.error(`⚠️  Using fallback wordmark (ALLOW_WORDMARK_FALLBACK=true). Please add font files to assets/fonts/ and redeploy.`);
       const len = input.brand_name.length;
       const fallbackWidth = len * wordmarkFontSize * 0.6;
       const fallbackHeight = wordmarkFontSize * 1.2;
@@ -583,8 +599,15 @@ export function buildWordmarkSvg(input: DeterministicSvgInput) {
   }
 
   const cmdCount = countPathCommands(wordmarkPath);
+  const allowFallback = process.env.ALLOW_WORDMARK_FALLBACK === "true" || process.env.DEMO_MODE === "true";
   if (cmdCount < 30) {
-    console.warn("wordmark too simple; likely font missing or conversion failed");
+    if (!allowFallback) {
+      throw new Error(
+        `Wordmark quality check failed: only ${cmdCount} commands (expected >= 30). ` +
+        `Fonts may be missing. Check /debug/fonts endpoint. Set ALLOW_WORDMARK_FALLBACK=true for local demos only.`
+      );
+    }
+    console.warn(`⚠️  Wordmark too simple: ${cmdCount} commands (ALLOW_WORDMARK_FALLBACK=true)`);
   }
 
   const vParts = viewBox.split(/\s+/).map(parseFloat);

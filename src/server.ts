@@ -251,6 +251,85 @@ app.get("/wordmark", (req, res) => {
   }
 });
 
+// Debug fonts endpoint
+app.get("/debug/fonts", async (req, res) => {
+  try {
+    const fontToPathModule = require("./tools/fontToPath.tool");
+    const { ensureGoogleFontsIndex, getAvailableFonts, fontToPath } = fontToPathModule;
+    
+    const googleFontsDirs = process.env.GOOGLE_FONTS_DIR
+      ? [process.env.GOOGLE_FONTS_DIR]
+      : [
+          path.join(process.cwd(), "dist", "assets", "google-fonts"),
+          path.join(process.cwd(), "assets", "google-fonts"),
+          process.platform !== "win32" ? "/app/assets/google-fonts" : null,
+        ].filter(Boolean) as string[];
+    
+    const assetsFontsDirs = [
+      path.join(process.cwd(), "dist", "assets", "fonts"),
+      path.join(process.cwd(), "assets", "fonts"),
+    ];
+    
+    const googleFontsCandidates = googleFontsDirs.map((dir) => {
+      const exists = fs.existsSync(dir);
+      let sampleCount = 0;
+      if (exists) {
+        try {
+          const index = ensureGoogleFontsIndex();
+          sampleCount = index.length;
+        } catch {}
+      }
+      return { path: dir, exists, sampleCount };
+    });
+    
+    const assetsFontsCandidates = assetsFontsDirs.map((dir) => {
+      const exists = fs.existsSync(dir);
+      let files: string[] = [];
+      if (exists) {
+        try {
+          files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith(".ttf") || f.toLowerCase().endsWith(".otf"));
+        } catch {}
+      }
+      return { path: dir, exists, files };
+    });
+    
+    let sampleRender: { font: string; ok: boolean; commandCount?: number; error?: string } = {
+      font: "Space Grotesk 700",
+      ok: false,
+    };
+    try {
+      const result = fontToPath({
+        text: "Swapqed",
+        font_family: "Space Grotesk",
+        font_weight: 700,
+        font_style: "normal",
+        font_size: 64,
+        tracking_px: 0,
+      });
+      const cmdCount = (result.path_d.match(/[MLCQAZ]/gi) || []).length;
+      sampleRender = { font: "Space Grotesk 700", ok: true, commandCount: cmdCount };
+    } catch (error) {
+      sampleRender.error = error instanceof Error ? error.message : String(error);
+    }
+    
+    res.json({
+      cwd: process.cwd(),
+      __dirname: __dirname,
+      nodeVersion: process.version,
+      isDistRun: __dirname.includes("dist"),
+      googleFontsDirCandidates: googleFontsCandidates,
+      assetsFontsCandidates: assetsFontsCandidates,
+      availableFonts: getAvailableFonts(),
+      sampleRender,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Failed to generate debug info",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
 // Start server with error handling
 try {
   app.listen(PORT, "0.0.0.0", () => {
