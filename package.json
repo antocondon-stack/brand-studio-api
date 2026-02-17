@@ -5,7 +5,8 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "build": "tsc && npm run copy-assets",
+    "build": "npm run setup-fonts-build && tsc && npm run copy-assets",
+    "setup-fonts-build": "node scripts/setup-fonts-build.js",
     "copy-assets": "node -e \"const fs=require('fs');const path=require('path');const src='assets';const dst='dist/assets';if(fs.existsSync(src)){const copy=(s,d)=>{if(!fs.existsSync(d))fs.mkdirSync(d,{recursive:true});fs.readdirSync(s).forEach(f=>{const sp=path.join(s,f);const dp=path.join(d,f);if(fs.statSync(sp).isDirectory())copy(sp,dp);else fs.copyFileSync(sp,dp);});};copy(src,dst);}\"",
     "copy-fonts": "node scripts/copy-fonts.js",
     "postbuild": "node scripts/copy-fonts.js",
